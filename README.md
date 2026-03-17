@@ -29,10 +29,15 @@ Click directly on the source signal to add or remove spikes. Every edit shows a 
 
 - **Add mode (A)**: click near a peak and the editor snaps to the nearest local maximum within the visible amplitude range, avoiding locations where a spike already exists
 - **Delete mode (D)**: click near an existing spike and the editor selects the closest one for removal
+- **Add in Selection mode (Ctrl+A)**: drag a region on the signal to add all detected peaks within it. Click the button again or press `Esc` to exit
+- **Delete in Selection mode (Ctrl+D)**: drag a region on the signal to delete all spikes within it. Click the button again or press `Esc` to exit
 - **View mode (V)**: default navigation mode; you can still quick-edit with `Ctrl+Click` (add) and `Alt+Click` (delete)
 
-### ROI Selection
-Toggle a draggable/resizable rectangle on the source plot (`R`). Once positioned, **ROI Add** finds all peaks inside the box and adds them as spikes, while **ROI Delete** removes any existing spikes that fall within the region. Useful for bulk-correcting a noisy segment or filling in a missed burst.
+### Scrolling/Zoom options
+There are three options for scrolling or zooming around the visualised spikes:
+- **Scroll only**: This will zoom in and out of the plotting window in ONLY the x-direction
+- **Shift + scroll**: This will scroll horizontally (along the x-dimension)
+- **Ctrl + scroll**: This will zoom in and out of the plotting window in both x- and y-directions
 
 ### Visualisation
 Three synchronised plots update whenever you switch unit or edit spikes:
@@ -115,7 +120,9 @@ python -m scd_app.gui.main_window
 | `Ctrl+3` | Switch to Edition tab |
 | `V` | View mode |
 | `A` | Add mode |
+| `Ctrl+A` | Add in selection mode |
 | `D` | Delete mode |
+| `Ctrl+D` | Delete in selection mode |
 | `R` | Toggle ROI |
 | `Shift+A` | Add spikes in ROI |
 | `Shift+D` | Delete spikes in ROI |
@@ -126,6 +133,9 @@ python -m scd_app.gui.main_window
 | `Ctrl+S` | Save |
 | `Up/Down` | Next/Previous MU |
 | `Home` | Reset View |
+| `Scroll` | Zoom X-Dimension |
+| `Shift+Scroll` | Scroll horizontally |
+| `Ctrl+Scroll` | Zoom |
 
 ## Citation
 
