@@ -56,6 +56,7 @@ def _run_channel_check_gui(
     grid_configs: dict,
     output_path: Path,
     existing_rejections: dict,
+    sampling_rate: int = 10240,
 ) -> dict:
     """
     Show the channel rejection GUI for each file in sequence.
@@ -66,7 +67,7 @@ def _run_channel_check_gui(
     from PyQt5.QtCore import QEventLoop, QTimer
     from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
     from matplotlib.figure import Figure
-    from matplotlib.widgets import Button
+    from matplotlib.widgets import Button, SpanSelector
     from scd_app.io.data_loader import load_field
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -109,23 +110,33 @@ def _run_channel_check_gui(
 
         grid_list = list(grid_configs.items())
 
-        # Initialise masks from existing JSON or zeros
+        # Initialise masks from existing JSON or zeros (supports old/new format)
         masks: List[np.ndarray] = []
+        time_masks_list: List[List] = []
         saved_file = rejections.get(fname, {})
         for port_name, cfg in grid_list:
-            n = len(cfg["channels"])
+            n    = len(cfg["channels"])
             prev = saved_file.get(port_name)
-            masks.append(
-                np.array(prev, dtype=int) if prev is not None
-                else np.zeros(n, dtype=int)
-            )
+            if prev is None:
+                masks.append(np.zeros(n, dtype=int))
+                time_masks_list.append([])
+            elif isinstance(prev, list):
+                # Old format: plain channel-mask array
+                masks.append(np.array(prev, dtype=int))
+                time_masks_list.append([])
+            else:
+                # New format: {"channels": [...], "time_masks": [...]}
+                masks.append(np.array(prev.get("channels", [0] * n), dtype=int))
+                time_masks_list.append(list(prev.get("time_masks", [])))
 
-        nav = {'current': 0, 'cids': [], 'buttons': []}
+        nav = {'current': 0, 'cids': [], 'buttons': [],
+               'time_mask_mode': False, 'span_selector': None}
         event_loop = QEventLoop()
 
         # ── draw one grid ─────────────────────────────────────────────────────
         def draw_grid(grid_idx,
                       _emg=emg, _grid_list=grid_list, _masks=masks,
+                      _time_masks_list=time_masks_list, _sampling_rate=sampling_rate,
                       _nav=nav, _win=win, _loop=event_loop,
                       _file_idx=file_idx, _fname=fname, _n_files=n_files):
 
@@ -137,7 +148,7 @@ def _run_channel_check_gui(
             is_first   = grid_idx == 0
             is_last    = grid_idx == len(_grid_list) - 1
 
-            ax = _win.figure.add_axes([0.03, 0.08, 0.94, 0.90])
+            ax = _win.figure.add_axes([0.03, 0.18, 0.94, 0.80])
             ax.set_facecolor(COLORS['background'])
 
             _win.figure.text(
@@ -145,13 +156,13 @@ def _run_channel_check_gui(
                 f"[{_file_idx + 1}/{_n_files}]  {_fname}   —   "
                 f"{port_name}  ({grid_idx + 1}/{len(_grid_list)})",
                 ha="center", va="center",
-                fontsize=12, weight='bold', color=COLORS['foreground'],
+                fontsize=18, weight='bold', color=COLORS['foreground'],
             )
             _win.figure.text(
-                0.5, 0.055,
+                0.5, 0.152,
                 "Click = Toggle channel  |  Scroll = Zoom  |  Right-drag = Pan  |  R = Reset",
                 ha="center", va="center",
-                fontsize=9, color=COLORS['info'],
+                fontsize=14, color=COLORS['info'],
             )
 
             # Down-sample for display speed
@@ -165,6 +176,15 @@ def _run_channel_check_gui(
             ref        = disp[:, active_idx] if len(active_idx) > 0 else disp
             active_std = float(np.std(ref))
             separation = active_std * 15 if active_std > 0 else 1.0
+
+            # ── time mask shading ──────────────────────────────────────────────
+            _tm = _time_masks_list[grid_idx]
+            is_mask_mode = _nav.get('time_mask_mode', False)
+            for (t_start_s, t_end_s) in _tm:
+                disp_start = t_start_s * _sampling_rate / step
+                disp_end   = t_end_s   * _sampling_rate / step
+                ax.axvspan(disp_start, disp_end,
+                           alpha=0.20, color=COLORS['error'], zorder=0)
 
             for ch in range(n_channels):
                 y = ch * separation
@@ -180,25 +200,39 @@ def _run_channel_check_gui(
                 ax.text(
                     -max_len * 0.01, ch * separation, str(ch),
                     color=COLORS['error'] if mask[ch] else COLORS['text_muted'],
-                    fontsize=7, ha='right', va='center',
+                    fontsize=12, ha='right', va='center',
                 )
 
             ax.set_xlim(0, max_len)
             ax.set_ylim(-separation, n_channels * separation)
             ax.axis('off')
 
-            n_rej = int(np.sum(mask))
+            n_rej   = int(np.sum(mask))
+            n_tmask = len(_tm)
+            status_parts = []
+            if n_rej:
+                status_parts.append(f"{n_rej} channel{'s' if n_rej != 1 else ''} rejected")
+            if n_tmask:
+                status_parts.append(f"{n_tmask} time region{'s' if n_tmask != 1 else ''} masked")
             _win.figure.text(
-                0.5, 0.032,
-                f"{n_rej} channel{'s' if n_rej != 1 else ''} rejected" if n_rej else "",
+                0.5, 0.124,
+                "  |  ".join(status_parts),
                 ha="center", va="center",
-                fontsize=9, color=COLORS['error'],
+                fontsize=14, color=COLORS['error'],
             )
+            if is_mask_mode:
+                _win.figure.text(
+                    0.5, 0.096,
+                    "TIME MASK MODE: drag to add region  |  Z = undo last  |  T or button = exit",
+                    ha="center", va="center",
+                    fontsize=13, color=COLORS['info'],
+                )
 
             # ── buttons ───────────────────────────────────────────────────────
-            prev_ax    = _win.figure.add_axes([0.05, 0.005, 0.12, 0.040])
-            next_ax    = _win.figure.add_axes([0.79, 0.005, 0.16, 0.040])
-            confirm_ax = _win.figure.add_axes([0.40, 0.005, 0.18, 0.040])
+            prev_ax    = _win.figure.add_axes([0.05, 0.012, 0.09, 0.065])
+            mask_ax    = _win.figure.add_axes([0.16, 0.012, 0.10, 0.065])
+            confirm_ax = _win.figure.add_axes([0.42, 0.012, 0.14, 0.065])
+            next_ax    = _win.figure.add_axes([0.80, 0.012, 0.15, 0.065])
 
             prev_btn = Button(
                 prev_ax, "← Previous",
@@ -207,7 +241,16 @@ def _run_channel_check_gui(
             )
             prev_btn.label.set_color(
                 COLORS['foreground'] if not is_first else COLORS['text_muted'])
-            prev_btn.label.set_fontsize(10)
+            prev_btn.label.set_fontsize(15)
+
+            mask_btn = Button(
+                mask_ax,
+                "Exit Mask Mode" if is_mask_mode else "Mask Times",
+                color=COLORS['error'] if is_mask_mode else COLORS['background_light'],
+                hovercolor=COLORS['background_hover'],
+            )
+            mask_btn.label.set_color('white' if is_mask_mode else COLORS['foreground'])
+            mask_btn.label.set_fontsize(14)
 
             if not is_last:
                 next_label = "Next →"
@@ -223,14 +266,14 @@ def _run_channel_check_gui(
                               color=next_color,
                               hovercolor=COLORS['background_hover'])
             next_btn.label.set_color('white')
-            next_btn.label.set_fontsize(10)
+            next_btn.label.set_fontsize(15)
             next_btn.label.set_weight('bold')
 
             confirm_btn = Button(confirm_ax, "CONFIRM ALL",
                                  color='#555555',
                                  hovercolor=COLORS['success'])
             confirm_btn.label.set_color(COLORS['foreground'])
-            confirm_btn.label.set_fontsize(9)
+            confirm_btn.label.set_fontsize(14)
 
             # ── interaction state ──────────────────────────────────────────────
             state = {
@@ -276,6 +319,9 @@ def _run_channel_check_gui(
                 if ev.button == 3:
                     _state['panning'] = False
                     return
+                if _nav.get('time_mask_mode', False):
+                    _state['press_event'] = None
+                    return
                 if ev.button != 1 or _state['press_event'] is None:
                     return
                 press = _state['press_event']
@@ -314,11 +360,21 @@ def _run_channel_check_gui(
             def on_key(ev,
                        _ax=ax, _canvas=_win.canvas,
                        _max_len=max_len, _sep=separation,
-                       _total_h=n_channels * separation):
+                       _total_h=n_channels * separation,
+                       _nav=_nav, _grid_idx=grid_idx, _tm=_tm):
                 if ev.key in ('r', 'R'):
                     _ax.set_xlim(0, _max_len)
                     _ax.set_ylim(-_sep * 0.5, _total_h + _sep * 0.5)
                     _canvas.draw_idle()
+                elif ev.key in ('z', 'Z'):
+                    if _nav.get('time_mask_mode', False) and _tm:
+                        _tm.pop()
+                        disconnect()
+                        draw_grid(_grid_idx)
+                elif ev.key in ('t', 'T'):
+                    disconnect()
+                    _nav['time_mask_mode'] = not _nav.get('time_mask_mode', False)
+                    draw_grid(_grid_idx)
 
             def go_prev(ev, _nav=_nav, _is_first=is_first):
                 if not _is_first:
@@ -338,6 +394,31 @@ def _run_channel_check_gui(
                 disconnect()
                 QTimer.singleShot(50, _loop.quit)
 
+            def toggle_mask_mode(_ev, _nav=_nav, _grid_idx=grid_idx):
+                disconnect()
+                _nav['time_mask_mode'] = not _nav.get('time_mask_mode', False)
+                draw_grid(_grid_idx)
+
+            def on_span_select(xmin, xmax,
+                               _grid_idx=grid_idx, _tm=_tm,
+                               _step=step, _fs=_sampling_rate):
+                min_span = max(1, int(0.05 * _fs / _step))
+                if xmax - xmin < min_span:
+                    return
+                start_s = round(xmin * _step / _fs, 3)
+                end_s   = round(xmax * _step / _fs, 3)
+                _tm.append([start_s, end_s])
+                disconnect()
+                draw_grid(_grid_idx)
+
+            span_sel = SpanSelector(
+                ax, on_span_select, 'horizontal',
+                useblit=False,
+                props=dict(alpha=0.20, facecolor=COLORS['error']),
+                button=1,
+            )
+            span_sel.set_active(is_mask_mode)
+
             cids = [
                 _win.canvas.mpl_connect('button_press_event',   on_press),
                 _win.canvas.mpl_connect('button_release_event', on_release),
@@ -348,9 +429,11 @@ def _run_channel_check_gui(
             prev_btn.on_clicked(go_prev)
             next_btn.on_clicked(go_next)
             confirm_btn.on_clicked(on_confirm)
+            mask_btn.on_clicked(toggle_mask_mode)
 
-            _nav['cids']    = cids
-            _nav['buttons'] = [prev_btn, next_btn, confirm_btn]
+            _nav['cids']         = cids
+            _nav['buttons']      = [prev_btn, mask_btn, next_btn, confirm_btn]
+            _nav['span_selector'] = span_sel
             _win.canvas.draw()
 
         def disconnect(_nav=nav, _win=win):
@@ -363,6 +446,10 @@ def _run_channel_check_gui(
                 except Exception:
                     pass
             _nav['buttons'] = []
+            span = _nav.get('span_selector')
+            if span is not None:
+                span.set_active(False)
+                _nav['span_selector'] = None
 
         # Launch event loop for this file
         draw_grid(0)
@@ -370,14 +457,21 @@ def _run_channel_check_gui(
 
         # ── save masks for this file ──────────────────────────────────────────
         rejections[fname] = {
-            port_name: masks[i].tolist()
+            port_name: {
+                "channels":   masks[i].tolist(),
+                "time_masks": time_masks_list[i],
+            }
             for i, (port_name, _) in enumerate(grid_list)
         }
         _save_json(output_path, rejections)
 
-        n_rej = sum(int(np.sum(m)) for m in masks)
-        print(f"  [{fname}] saved — {n_rej} channel(s) rejected "
-              f"across {len(grid_list)} grid(s)")
+        n_rej   = sum(int(np.sum(m)) for m in masks)
+        n_tmask = sum(len(tm) for tm in time_masks_list)
+        msg = f"  [{fname}] saved — {n_rej} channel(s) rejected"
+        if n_tmask:
+            msg += f", {n_tmask} time region(s) masked"
+        msg += f" across {len(grid_list)} grid(s)"
+        print(msg)
 
     win.close()
     return rejections
@@ -546,13 +640,24 @@ def main():
         grid_configs       = grid_configs,
         output_path        = output_path,
         existing_rejections= existing,
+        sampling_rate      = sampling_rate,
     )
 
     print(f"\nAll done. Rejections saved to: {output_path}")
     print("\nSummary:")
     for fname, grids in rejections.items():
-        total = sum(sum(m) for m in grids.values())
-        print(f"  {fname}: {total} channel(s) rejected")
+        total_ch = sum(
+            sum(v["channels"] if isinstance(v, dict) else v)
+            for v in grids.values()
+        )
+        total_tm = sum(
+            len(v["time_masks"]) if isinstance(v, dict) else 0
+            for v in grids.values()
+        )
+        msg = f"  {fname}: {total_ch} channel(s) rejected"
+        if total_tm:
+            msg += f", {total_tm} time region(s) masked"
+        print(msg)
 
 
 if __name__ == "__main__":

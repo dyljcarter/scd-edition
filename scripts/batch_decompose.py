@@ -71,35 +71,61 @@ def _load_per_file_rejections(
     json_path: Path,
     file_path: Path,
     grid_configs: dict,
-) -> List[np.ndarray]:
+) -> tuple:
     """
-    Load per-file rejection masks from a channel_rejections.json produced by
-    batch_channel_check.py.  Falls back to all-zeros if the file is not found
-    in the JSON.
+    Load per-file rejection masks and time masks from a rejections JSON produced
+    by batch_channel_check.py.  Falls back to all-zeros / empty if not found.
+
+    Supports both the old format (grid value = list of ints) and the new format
+    (grid value = {"channels": [...], "time_masks": [[start_s, end_s], ...]}).
+
+    Returns
+    -------
+    channel_masks : List[np.ndarray]   one binary mask per grid
+    time_masks    : List[List]         per grid: list of [start_s, end_s] pairs
     """
     with open(json_path) as f:
         data = json.load(f)
 
     fname  = file_path.name
     entry  = data.get(fname, {})
-    masks  = []
+    masks: List[np.ndarray] = []
+    all_time_masks: List[List] = []
+
     for port_name, config in grid_configs.items():
-        n    = len(config["channels"])
+        n     = len(config["channels"])
         saved = entry.get(port_name)
-        if saved is not None:
+        if saved is None:
+            mask            = np.zeros(n, dtype=int)
+            grid_time_masks = []
+        elif isinstance(saved, list):
+            # Old format: plain channel-mask array
             mask = np.array(saved, dtype=int)
             if len(mask) != n:
                 print(f"  Warning: rejection mask length mismatch for "
                       f"{port_name} in {fname} — resetting.")
                 mask = np.zeros(n, dtype=int)
+            grid_time_masks = []
         else:
-            mask = np.zeros(n, dtype=int)
-        masks.append(mask)
+            # New format: {"channels": [...], "time_masks": [...]}
+            ch   = saved.get("channels", [0] * n)
+            mask = np.array(ch, dtype=int)
+            if len(mask) != n:
+                print(f"  Warning: rejection mask length mismatch for "
+                      f"{port_name} in {fname} — resetting.")
+                mask = np.zeros(n, dtype=int)
+            grid_time_masks = saved.get("time_masks", [])
 
-    n_rej = sum(int(m.sum()) for m in masks)
+        masks.append(mask)
+        all_time_masks.append(grid_time_masks)
+
+    n_rej   = sum(int(m.sum()) for m in masks)
+    n_tmask = sum(len(tm) for tm in all_time_masks)
     if n_rej:
         print(f"  Loaded rejections for {fname}: {n_rej} channel(s) rejected")
-    return masks
+    if n_tmask:
+        print(f"  Loaded time masks for {fname}: {n_tmask} region(s)")
+    return masks, all_time_masks
 
 
 def _setup_from_channel_config(json_path: Path, param_overrides: dict) -> tuple:
@@ -228,7 +254,8 @@ def decompose_files(
     bad_channel_masks: List[np.ndarray],
     sampling_rate: int,
     output_dir: Path,
-    plateau_s: Optional[tuple] = None,   # (start_s, end_s) in seconds, or None = full file
+    plateau_s: Optional[tuple] = None,        # (start_s, end_s) in seconds, or None = full file
+    time_masks_per_grid: Optional[List] = None,  # per-grid list of [start_s, end_s] pairs
     verbose: bool = True,
 ):
     """
@@ -270,12 +297,13 @@ def decompose_files(
         save_path = output_dir / f"{stem}_decomp_output.pkl"
 
         worker = _HeadlessWorker(
-            emg_data         = emg,
-            grid_configs     = grid_configs,
-            rejected_channels= bad_channel_masks,
-            plateau_coords   = plateau_coords,
-            sampling_rate    = sampling_rate,
-            save_path        = save_path,
+            emg_data            = emg,
+            grid_configs        = grid_configs,
+            rejected_channels   = bad_channel_masks,
+            plateau_coords      = plateau_coords,
+            sampling_rate       = sampling_rate,
+            save_path           = save_path,
+            time_masks_per_grid = time_masks_per_grid or [],
         )
         worker.run()
 
@@ -291,14 +319,16 @@ class _HeadlessWorker:
     """
 
     def __init__(self, emg_data, grid_configs, rejected_channels,
-                 plateau_coords, sampling_rate, save_path):
-        self.emg_data          = emg_data
-        self.grid_configs      = grid_configs
-        self.rejected_channels = rejected_channels
-        self.plateau_coords    = plateau_coords
-        self.sampling_rate     = sampling_rate
-        self.save_path         = save_path
-        self._is_running       = True
+                 plateau_coords, sampling_rate, save_path,
+                 time_masks_per_grid=None):
+        self.emg_data            = emg_data
+        self.grid_configs        = grid_configs
+        self.rejected_channels   = rejected_channels
+        self.plateau_coords      = plateau_coords
+        self.sampling_rate       = sampling_rate
+        self.save_path           = save_path
+        self.time_masks_per_grid = time_masks_per_grid or []
+        self._is_running         = True
 
     # Mimic Qt signals as no-ops so we can share the run() implementation
     class _Signal:
@@ -357,14 +387,15 @@ class _HeadlessWorker:
                           f"{port_name} — resetting.")
                     rejected = np.zeros(len(channels), dtype=int)
 
+                good_channels = np.where(rejected == 0)[0]
+                noise_std = (
+                    grid_data[:, good_channels].std().item()
+                    if len(good_channels) > 0 else 1e-6
+                )
+
                 bad_channels = np.where(rejected == 1)[0]
                 if len(bad_channels) > 0:
                     print(f"    Masked channels : {list(bad_channels)}")
-                    good_channels = np.where(rejected == 0)[0]
-                    noise_std = (
-                        grid_data[:, good_channels].std().item()
-                        if len(good_channels) > 0 else 1e-6
-                    )
                     gen = torch.Generator()
                     gen.manual_seed(42)
                     noise = torch.randn(
@@ -373,6 +404,26 @@ class _HeadlessWorker:
                     grid_data[:, bad_channels] = noise
                 else:
                     print(f"    Masked channels : none")
+
+                # Apply time masks: replace all channels in masked segments with noise
+                grid_time_masks = (
+                    self.time_masks_per_grid[grid_idx]
+                    if grid_idx < len(self.time_masks_per_grid) else []
+                )
+                for (t_start_s, t_end_s) in grid_time_masks:
+                    t_start = int(round(t_start_s * self.sampling_rate))
+                    t_end   = int(round(t_end_s   * self.sampling_rate))
+                    t_start = max(0, min(t_start, grid_data.shape[0]))
+                    t_end   = max(t_start + 1, min(t_end, grid_data.shape[0]))
+                    n_samp  = t_end - t_start
+                    gen_t   = torch.Generator()
+                    gen_t.manual_seed(43 + t_start)
+                    noise_t = torch.randn(
+                        n_samp, grid_data.shape[1], generator=gen_t
+                    ) * noise_std
+                    grid_data[t_start:t_end, :] = noise_t
+                    print(f"    Time masked : {t_start_s:.3f}s – {t_end_s:.3f}s  "
+                          f"({n_samp} samples)")
 
                 start_sample = int(self.plateau_coords[0])
                 end_sample   = int(self.plateau_coords[1])
@@ -545,18 +596,21 @@ def main():
     t_total = time.perf_counter()
     for file_idx, file_path in enumerate(file_paths):
         if rejections_path:
-            masks = _load_per_file_rejections(rejections_path, file_path, grid_configs)
+            masks, file_time_masks = _load_per_file_rejections(
+                rejections_path, file_path, grid_configs)
         else:
-            masks = bad_masks
+            masks          = bad_masks
+            file_time_masks = [[] for _ in grid_configs]
         out = output_dir if output_dir else file_path.parent
         decompose_files(
-            file_paths        = [file_path],
-            layout            = layout,
-            grid_configs      = grid_configs,
-            bad_channel_masks = masks,
-            sampling_rate     = fs,
-            plateau_s         = plateau_s,
-            output_dir        = out,
+            file_paths          = [file_path],
+            layout              = layout,
+            grid_configs        = grid_configs,
+            bad_channel_masks   = masks,
+            sampling_rate       = fs,
+            plateau_s           = plateau_s,
+            time_masks_per_grid = file_time_masks,
+            output_dir          = out,
         )
     elapsed = time.perf_counter() - t_total
     print(f"\nAll done in {elapsed:.1f}s.")
