@@ -48,6 +48,56 @@ COLORS = {
 }
 
 
+# ── Force overlay helpers (mirror decomposition_tab.py) ────────────────────────
+
+def _parse_filename_task(stem: str):
+    """Extract (direction, finger_names) from a recording filename stem.
+
+    mvc-<number><ext|flex>  → direction = "ext" | "flex"
+    fing-<LETTERS>          → T=thumb  I=index  M=middle  R=ring  L=little
+    Returns (direction, [finger_names]) or (None, []) if not parseable.
+    """
+    import re
+    _FINGER = {'T': 'thumb', 'I': 'index', 'M': 'middle',
+               'R': 'ring',  'L': 'little'}
+    direction = None
+    fingers   = []
+    mvc_m = re.search(r'mvc-([^_]+)', stem, re.IGNORECASE)
+    if mvc_m:
+        mvc_str = mvc_m.group(1).lower()
+        if 'ext' in mvc_str:
+            direction = 'ext'
+        elif 'flex' in mvc_str:
+            direction = 'flex'
+    fing_m = re.search(r'fing-([A-Za-z]+)', stem)
+    if fing_m:
+        fingers = [_FINGER[c] for c in fing_m.group(1).upper() if c in _FINGER]
+    return direction, fingers
+
+
+def _select_aux_for_task(aux_cfgs: list, direction, fingers: list) -> list:
+    """Decide which aux channels to overlay.
+
+    Case 2 – no aux configs           → return []
+    Case 3 – aux with no unit labels  → return all
+    Case 1 – aux with unit labels     → return those matching finger + direction;
+                                        fallback = all labelled ones.
+    """
+    if not aux_cfgs:
+        return []
+    labeled   = [a for a in aux_cfgs if a.get('unit', '').strip()]
+    if not labeled:
+        return aux_cfgs
+    if direction is None or not fingers:
+        return labeled
+    matched = [
+        a for a in labeled
+        if any(f in a['unit'].lower() for f in fingers)
+        and direction in a['unit'].lower()
+    ]
+    return matched if matched else labeled
+
+
 # ── GUI ────────────────────────────────────────────────────────────────────────
 
 def _run_channel_check_gui(
@@ -57,6 +107,7 @@ def _run_channel_check_gui(
     output_path: Path,
     existing_rejections: dict,
     sampling_rate: int = 10240,
+    aux_configs: list = None,
 ) -> dict:
     """
     Show the channel rejection GUI for each file in sequence.
@@ -129,8 +180,17 @@ def _run_channel_check_gui(
                 masks.append(np.array(prev.get("channels", [0] * n), dtype=int))
                 time_masks_list.append(list(prev.get("time_masks", [])))
 
+        _aux_cfgs = aux_configs or []
+        _stem = file_path.stem
+        _direction, _fingers = _parse_filename_task(_stem)
+        aux_to_show = _select_aux_for_task(_aux_cfgs, _direction, _fingers)
+        if aux_to_show:
+            print(f"  [force overlay] {fname}: direction={_direction!r}  "
+                  f"fingers={_fingers}  channels={[a.get('unit') for a in aux_to_show]}")
+
         nav = {'current': 0, 'cids': [], 'buttons': [],
-               'time_mask_mode': False, 'span_selector': None}
+               'time_mask_mode': False, 'span_selector': None,
+               'show_force': bool(aux_to_show)}
         event_loop = QEventLoop()
 
         # ── draw one grid ─────────────────────────────────────────────────────
@@ -138,7 +198,8 @@ def _run_channel_check_gui(
                       _emg=emg, _grid_list=grid_list, _masks=masks,
                       _time_masks_list=time_masks_list, _sampling_rate=sampling_rate,
                       _nav=nav, _win=win, _loop=event_loop,
-                      _file_idx=file_idx, _fname=fname, _n_files=n_files):
+                      _file_idx=file_idx, _fname=fname, _n_files=n_files,
+                      _aux_to_show=aux_to_show):
 
             _win.figure.clf()
             port_name, cfg = _grid_list[grid_idx]
@@ -207,6 +268,35 @@ def _run_channel_check_gui(
             ax.set_ylim(-separation, n_channels * separation)
             ax.axis('off')
 
+            # ── Force / aux overlay ───────────────────────────────────────────
+            if _aux_to_show and _nav.get('show_force', False):
+                total_height = n_channels * separation
+                force_color  = '#FFD700'
+                first_label  = True
+                import torch as _torch
+                for a in _aux_to_show:
+                    s = int(a.get('start_chan', 0))
+                    e = int(a.get('end_chan', s + 1))
+                    n_total_ch = _emg.shape[1]
+                    if s >= e or e > n_total_ch:
+                        continue
+                    raw_full = _emg[:, s:e]
+                    if _torch.is_tensor(raw_full):
+                        raw_full = raw_full.numpy()
+                    raw = raw_full[::step, :].mean(axis=1)   # downsampled to match x-axis
+                    sig = raw - raw.mean()
+                    peak = max(abs(sig.max()), abs(sig.min()), 1e-9)
+                    sig_scaled = sig / peak * (0.35 * total_height) + total_height / 2
+                    label = a.get('unit', a.get('name', 'force')) if first_label else '_'
+                    ax.plot(sig_scaled, color=force_color, alpha=0.55,
+                            linewidth=1.2, zorder=3, label=label)
+                    first_label = False
+                ax.legend(
+                    loc='upper right', fontsize=9,
+                    facecolor=COLORS['background_light'],
+                    labelcolor=force_color, framealpha=0.7,
+                )
+
             n_rej   = int(np.sum(mask))
             n_tmask = len(_tm)
             status_parts = []
@@ -274,6 +364,28 @@ def _run_channel_check_gui(
                                  hovercolor=COLORS['success'])
             confirm_btn.label.set_color(COLORS['foreground'])
             confirm_btn.label.set_fontsize(14)
+
+            # ── "Show force" checkbox (only when aux channels available) ──────
+            check = None
+            if _aux_to_show:
+                from matplotlib.widgets import CheckButtons
+                cb_ax = _win.figure.add_axes([0.28, 0.012, 0.12, 0.065])
+                cb_ax.set_facecolor(COLORS['background'])
+                check = CheckButtons(
+                    cb_ax, ['Show force'], [_nav.get('show_force', True)]
+                )
+                check.labels[0].set_color(COLORS['foreground'])
+                check.labels[0].set_fontsize(11)
+                for r in getattr(check, 'rectangles', []):
+                    r.set_edgecolor(COLORS['text_muted'])
+                    r.set_facecolor(COLORS['background_light'])
+
+                def on_force_toggle(_label, _check=check, _nav=_nav, _grid_idx=grid_idx):
+                    _nav['show_force'] = _check.get_status()[0]
+                    disconnect()
+                    draw_grid(_grid_idx)
+
+                check.on_clicked(on_force_toggle)
 
             # ── interaction state ──────────────────────────────────────────────
             state = {
@@ -431,8 +543,10 @@ def _run_channel_check_gui(
             confirm_btn.on_clicked(on_confirm)
             mask_btn.on_clicked(toggle_mask_mode)
 
-            _nav['cids']         = cids
-            _nav['buttons']      = [prev_btn, mask_btn, next_btn, confirm_btn]
+            _nav['cids']          = cids
+            _nav['buttons']       = [prev_btn, mask_btn, next_btn, confirm_btn]
+            if check is not None:
+                _nav['buttons'].append(check)
             _nav['span_selector'] = span_sel
             _win.canvas.draw()
 
@@ -504,6 +618,8 @@ def _setup_from_channel_config(json_path: Path):
                                else "intramuscular",
         }
 
+    aux_configs = data.get("aux_channels", [])
+
     # Derive the layout from the loader field (e.g. ".otb+")
     from scd_app.io.data_loader import load_layout
     loader_map = {
@@ -522,7 +638,7 @@ def _setup_from_channel_config(json_path: Path):
         loader_path = Path(str(pkg_res.files("scd_app") / "resources" / "loaders_configs" / loader_file))
     layout = load_layout(loader_path)
 
-    return grid_configs, layout, sampling_rate
+    return grid_configs, layout, sampling_rate, aux_configs
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -554,11 +670,12 @@ def main():
 
     # ── load config ───────────────────────────────────────────────────────────
     if args.channel_config:
-        grid_configs, layout, sampling_rate = _setup_from_channel_config(
+        grid_configs, layout, sampling_rate, aux_configs = _setup_from_channel_config(
             Path(args.channel_config))
         print(f"Channel config : {args.channel_config}")
         print(f"Fs             : {sampling_rate} Hz")
         print(f"Grids          : {list(grid_configs.keys())}")
+        print(f"Aux channels   : {len(aux_configs)}")
     elif args.config and args.layout:
         from scd_app.core.config import ConfigManager
         from scd_app.io.data_loader import load_layout
@@ -566,6 +683,7 @@ def main():
         config = mgr.load_session(Path(args.config))
         layout = load_layout(Path(args.layout))
         sampling_rate = config.sampling_frequency
+        aux_configs   = []
         print(f"Session : {config.name}  |  Fs: {sampling_rate} Hz")
         grid_configs: Dict[str, dict] = {}
         for port in config.ports:
@@ -641,6 +759,7 @@ def main():
         output_path        = output_path,
         existing_rejections= existing,
         sampling_rate      = sampling_rate,
+        aux_configs        = aux_configs,
     )
 
     print(f"\nAll done. Rejections saved to: {output_path}")
