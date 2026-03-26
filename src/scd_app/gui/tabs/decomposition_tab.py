@@ -647,6 +647,15 @@ class DecompositionTab(QWidget):
         ]
         return matched if matched else labeled  # Case 1 (fallback = all)
 
+    @staticmethod
+    def _downsample_for_display(data: np.ndarray, canvas_width_px: int) -> tuple:
+        """Downsample EMG data to a pixel-budget limit for display performance."""
+        max_points = canvas_width_px * 3
+        step = max(1, data.shape[0] // max_points)
+        if step <= 1:
+            return data, 1
+        return data[::step, :], step
+
     def _manual_channel_rejection(self):
         """Show EMG channels per grid and let user select which to remove."""
         if self.emg_data is None:
@@ -885,6 +894,25 @@ class DecompositionTab(QWidget):
             confirm_btn.label.set_color("white")
             confirm_btn.label.set_weight("bold")
             confirm_btn.label.set_fontsize(10)
+
+            cancel_rej_btn = Button(
+                cancel_rej_ax,
+                "Cancel",
+                color=COLORS["error"],
+                hovercolor="#c0392b",
+            )
+            cancel_rej_btn.label.set_color("white")
+            cancel_rej_btn.label.set_weight("bold")
+            cancel_rej_btn.label.set_fontsize(10)
+
+            reset_btn = Button(
+                reset_ax,
+                "⟳ Reset View",
+                color="#4b5563",
+                hovercolor="#6b7280",
+            )
+            reset_btn.label.set_color("white")
+            reset_btn.label.set_fontsize(9)
 
             # ── "Show force" checkbox (only when aux channels available) ────
             if _aux_to_show:
@@ -1200,7 +1228,10 @@ class DecompositionTab(QWidget):
 
             # Store for cleanup
             nav["cids"] = cids
-            nav.setdefault("buttons", []).extend([prev_btn, next_btn, confirm_btn])
+            nav.setdefault("buttons", []).extend(
+                [prev_btn, next_btn, confirm_btn, cancel_rej_btn, reset_btn]
+            )
+            nav["scroll_timer"] = state["scroll_timer"]
 
             self.canvas.draw()
 
