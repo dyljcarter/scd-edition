@@ -226,6 +226,15 @@ class DecompositionTab(QWidget):
         batch_grid.addWidget(lbl1, 0, 0)
         batch_grid.addWidget(self.rejection_mode, 0, 1)
 
+        downsample_cb = QCheckBox("Downsample EMG for Display")
+        downsample_cb.setChecked(False)
+        downsample_cb.setToolTip(
+            "Reduces the number of points plotted during channel rejection for faster rendering.\n"
+            "Useful for long recordings at high sampling rates.\n"
+            "Does not affect the data used for decomposition."
+        )
+        add_global("", downsample_cb, "downsample_display")
+
         lbl2 = QLabel("Time Window:")
         lbl2.setStyleSheet(f"color: {COLORS['info_light']};")
         self.time_mode = QComboBox()
@@ -391,9 +400,7 @@ class DecompositionTab(QWidget):
         ts_bar.addStretch()
 
         layout.addWidget(self.time_sel_widget, stretch=0)
-        self.time_sel_widget.setVisible(
-            False
-        )  # shown only during time window selection
+        self.time_sel_widget.setVisible(False)
 
         self.figure = Figure(facecolor=COLORS["background"])
         self.canvas = FigureCanvas(self.figure)
@@ -740,9 +747,16 @@ class DecompositionTab(QWidget):
 
             raw_data = self.emg_data[:, channels].numpy()
 
-            # Downsample for display
-            canvas_width_px = self.canvas.get_width_height()[0] or 1000
-            disp_data, step = self._downsample_for_display(raw_data, canvas_width_px)
+            # Downsample for display option (if enabled, does not affect actual decomposition data)
+            use_downsample = self.global_widgets["downsample_display"].isChecked()
+            if use_downsample:
+                canvas_width_px = self.canvas.get_width_height()[0] or 1000
+                disp_data, step = self._downsample_for_display(
+                    raw_data, canvas_width_px
+                )
+            else:
+                disp_data = raw_data
+                step = 1
             max_len = disp_data.shape[0]
 
             # Normalise separation using only active (non-rejected) channels.
@@ -1026,7 +1040,7 @@ class DecompositionTab(QWidget):
                 state["dragging"] = False
                 state["drag_start"] = None
 
-                # If we were panning, don't treat this as a channel click
+                # If panning, don't treat this as a channel click
                 if was_dragging:
                     state["press_event"] = None
                     return
@@ -1281,8 +1295,6 @@ class DecompositionTab(QWidget):
         if self.emg_data is None or not self.grid_configs:
             return
 
-        # Ensure start_btn is disabled — it is re-enabled only once a valid
-        # time window is explicitly selected by the user
         self.start_btn.setEnabled(False)
 
         self._cleanup_matplotlib_widgets()
@@ -1901,8 +1913,9 @@ class DecompositionTab(QWidget):
         self.rejection_mode.setEnabled(enabled)
         self.time_mode.setEnabled(enabled)
         self.grid_selector.setEnabled(enabled)
-        # start_btn enabled state is managed explicitly by the flow,
-        # not here — so we do not touch it in this helper
+
+        # Downsample checkbox stays interactive at all times
+        self.global_widgets["downsample_display"].setEnabled(True)
 
     def _update_confirm_btn_visibility(self):
         """Enable Confirm & Run button only when start AND end are explicitly set."""
