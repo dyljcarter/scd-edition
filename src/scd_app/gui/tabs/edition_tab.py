@@ -1728,6 +1728,7 @@ class EditionTab(QWidget):
                 "data",
                 "plateau_coords",
                 "chans_per_electrode",
+                "channel_indices",
                 "emg_mask",
                 "electrodes",
                 "dewhitened_filters",
@@ -1955,7 +1956,7 @@ class EditionTab(QWidget):
 
         self._update_status(f"Recalculating filter for MU {mu.id}…")
         try:
-            new_filter, new_source_full = recalculate_unit_filter(
+            new_filter, new_source_full, new_ts_abs = recalculate_unit_filter(
                 raw_port_channels=raw_port,
                 decomp_data=self._original_decomp_data,
                 port_idx=port_idx,
@@ -1967,17 +1968,27 @@ class EditionTab(QWidget):
                 current_port_filters=current_port_filters,
             )
 
+            new_timestamps = (
+                new_ts_abs
+                if self._full_source_mode
+                else self._ts_to_plateau_local(new_ts_abs)
+            )
+
             old_source = mu.source.copy()
             old_filter = mu.mu_filter.copy() if mu.mu_filter is not None else None
+            old_timestamps = mu.timestamps.copy()
 
             mu.source = new_source_full
             mu.mu_filter = new_filter
+            mu.timestamps = new_timestamps
 
             self._push_undo(
                 UndoAction(
                     description=f"Recalculate filter MU {mu.id}",
                     port_name=self._current_port,
                     mu_idx=self._current_mu_idx,
+                    old_timestamps=old_timestamps,
+                    new_timestamps=new_timestamps,
                     old_source=old_source,
                     old_filter=old_filter,
                     new_source=new_source_full,

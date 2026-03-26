@@ -39,5 +39,6 @@ data/
 tests/
 export/
 docs/
+bats/
 
 resources/loaders_configs/loader_dynamic.yaml

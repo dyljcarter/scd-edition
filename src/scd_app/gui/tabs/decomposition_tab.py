@@ -576,16 +576,76 @@ class DecompositionTab(QWidget):
             except (ValueError, KeyError) as e:
                 print(f"Warning: Could not sync parameter for {port_name}: {e}")
 
+    # ------------------------------------------------------------------ #
+    #  Aux / force channel helpers                                        #
+    # ------------------------------------------------------------------ #
+
     @staticmethod
-    def _downsample_for_display(
-        data: np.ndarray, canvas_width_px: int
-    ) -> tuple[np.ndarray, int]:
-        """Downsample EMG data to a pixel-budget limit for display performance."""
-        max_points = canvas_width_px * 3
-        step = max(1, data.shape[0] // max_points)
-        if step <= 1:
-            return data, 1
-        return data[::step, :], step
+    def _parse_filename_task(stem: str):
+        """Extract (direction, finger_names) from a recording filename stem.
+
+        Looks for:
+          mvc-<number><ext|flex>   → direction = "ext" | "flex"
+          fing-<LETTERS>           → finger codes → full names
+                                     T=thumb  I=index  M=middle  R=ring  L=little
+
+        Returns (direction, [finger_names]) or (None, []) if not parseable.
+        """
+        import re
+
+        _FINGER = {
+            "T": "thumb",
+            "I": "index",
+            "M": "middle",
+            "R": "ring",
+            "L": "little",
+        }
+        direction = None
+        fingers = []
+
+        mvc_m = re.search(r"mvc-([^_]+)", stem, re.IGNORECASE)
+        if mvc_m:
+            mvc_str = mvc_m.group(1).lower()
+            if "ext" in mvc_str:
+                direction = "ext"
+            elif "flex" in mvc_str:
+                direction = "flex"
+
+        fing_m = re.search(r"fing-([A-Za-z]+)", stem)
+        if fing_m:
+            fingers = [_FINGER[c] for c in fing_m.group(1).upper() if c in _FINGER]
+
+        return direction, fingers
+
+    @staticmethod
+    def _select_aux_for_task(aux_cfgs: list, direction, fingers: list) -> list:
+        """Decide which aux channels to overlay according to the three cases:
+
+        Case 2 – no aux configs at all         → return []  (nothing to show)
+        Case 3 – aux configs have no unit label → return all configs
+        Case 1 – aux configs have unit labels   → return those whose label
+                  contains the finger name AND direction (case-insensitive);
+                  if none match, fall back to showing all labelled ones.
+        """
+        if not aux_cfgs:
+            return []  # Case 2
+
+        labeled = [a for a in aux_cfgs if a.get("unit", "").strip()]
+        unlabeled = [a for a in aux_cfgs if not a.get("unit", "").strip()]
+
+        if not labeled:
+            return aux_cfgs  # Case 3 – no labels
+
+        if direction is None or not fingers:
+            return labeled  # can't match → show all
+
+        matched = [
+            a
+            for a in labeled
+            if any(f in a["unit"].lower() for f in fingers)
+            and direction in a["unit"].lower()
+        ]
+        return matched if matched else labeled  # Case 1 (fallback = all)
 
     def _manual_channel_rejection(self):
         """Show EMG channels per grid and let user select which to remove."""
@@ -609,9 +669,21 @@ class DecompositionTab(QWidget):
             else:
                 self.rejected_channels.append(np.zeros(n_channels, dtype=int))
 
+        # ── Aux / force overlay setup ─────────────────────────────────────
+        _aux_cfgs = getattr(self.config, "aux_channels", []) if self.config else []
+        _stem = self.emg_path.stem if self.emg_path else ""
+        _direction, _fingers = self._parse_filename_task(_stem)
+        _aux_to_show = self._select_aux_for_task(_aux_cfgs, _direction, _fingers)
+
+        if _aux_to_show:
+            print(
+                f"  [force overlay] direction={_direction!r}  "
+                f"fingers={_fingers}  channels={[a.get('unit') for a in _aux_to_show]}"
+            )
+
         import time
 
-        nav = {"current": 0, "cancelled": False}
+        nav = {"current": 0, "show_force": bool(_aux_to_show)}
 
         def draw_grid(grid_idx, restore_view=None, fixed_separation=None):
             """Draw a single grid's channels.
@@ -740,6 +812,42 @@ class DecompositionTab(QWidget):
 
             ax.xaxis.set_major_formatter(FuncFormatter(_time_fmt))
 
+            # ── Force / aux overlay ───────────────────────────────────────────
+            if _aux_to_show and nav.get("show_force", False):
+                total_height = n_channels * separation
+                force_color = "#FFD700"  # gold — visible on dark background
+                first_label = True
+                for a in _aux_to_show:
+                    s = int(a.get("start_chan", 0))
+                    e = int(a.get("end_chan", s + 1))
+                    n_total_ch = self.emg_data.shape[1]
+                    if s >= e or e > n_total_ch:
+                        continue
+                    raw = self.emg_data[:, s:e].numpy().mean(axis=1)  # (samples,)
+                    sig = raw - raw.mean()  # remove DC offset
+                    peak = max(abs(sig.max()), abs(sig.min()), 1e-9)
+                    # Scale to span ~70 % of total channel height, centred
+                    sig_scaled = sig / peak * (0.35 * total_height) + total_height / 2
+                    label = (
+                        a.get("unit", a.get("name", "force")) if first_label else "_"
+                    )
+                    ax.plot(
+                        sig_scaled,
+                        color=force_color,
+                        alpha=0.55,
+                        linewidth=1.2,
+                        zorder=3,
+                        label=label,
+                    )
+                    first_label = False
+                ax.legend(
+                    loc="upper right",
+                    fontsize=7,
+                    facecolor=COLORS["background_light"],
+                    labelcolor=force_color,
+                    framealpha=0.7,
+                )
+
             # --- Navigation buttons ---
             prev_ax = self.figure.add_axes([0.05, 0.01, 0.12, 0.05])
             next_ax = self.figure.add_axes([0.83, 0.01, 0.12, 0.05])
@@ -778,26 +886,30 @@ class DecompositionTab(QWidget):
             confirm_btn.label.set_weight("bold")
             confirm_btn.label.set_fontsize(10)
 
-            cancel_rej_btn = Button(
-                cancel_rej_ax,
-                "Cancel",
-                color=COLORS["error"],
-                hovercolor="#c0392b",
-            )
-            cancel_rej_btn.label.set_color("white")
-            cancel_rej_btn.label.set_weight("bold")
-            cancel_rej_btn.label.set_fontsize(10)
+            # ── "Show force" checkbox (only when aux channels available) ────
+            if _aux_to_show:
+                from matplotlib.widgets import CheckButtons
 
-            reset_btn = Button(
-                reset_ax,
-                "⟳ Reset View",
-                color="#4b5563",
-                hovercolor="#6b7280",
-            )
-            reset_btn.label.set_color("white")
-            reset_btn.label.set_fontsize(9)
+                cb_ax = self.figure.add_axes([0.20, 0.005, 0.13, 0.06])
+                cb_ax.set_facecolor(COLORS["background"])
+                check = CheckButtons(
+                    cb_ax, ["Show force"], [nav.get("show_force", True)]
+                )
+                check.labels[0].set_color(COLORS["foreground"])
+                check.labels[0].set_fontsize(9)
+                for r in getattr(check, "rectangles", []):
+                    r.set_edgecolor(COLORS.get("text_muted", "#888"))
+                    r.set_facecolor(COLORS["background_light"])
 
-            # Rejected count
+                def on_force_toggle(_label, _check=check):
+                    nav["show_force"] = _check.get_status()[0]
+                    disconnect()
+                    draw_grid(nav["current"])
+
+                check.on_clicked(on_force_toggle)
+                nav.setdefault("buttons", []).append(check)
+
+            # Rejected count for this grid
             n_rej = np.sum(mask)
             rej_text = self.figure.text(
                 0.285,
@@ -1088,14 +1200,7 @@ class DecompositionTab(QWidget):
 
             # Store for cleanup
             nav["cids"] = cids
-            nav["buttons"] = [
-                prev_btn,
-                next_btn,
-                confirm_btn,
-                cancel_rej_btn,
-                reset_btn,
-            ]
-            nav["scroll_timer"] = state["scroll_timer"]
+            nav.setdefault("buttons", []).extend([prev_btn, next_btn, confirm_btn])
 
             self.canvas.draw()
 
@@ -1483,6 +1588,7 @@ class DecompositionTab(QWidget):
 
         save_path = self._output_dir / f"{file_path.stem}_decomp_output.pkl"
 
+        aux_configs = getattr(self.config, "aux_channels", [])
         self.worker = DecompositionWorker(
             self.emg_data,
             self.grid_configs,
@@ -1490,6 +1596,7 @@ class DecompositionTab(QWidget):
             self.plateau_coords,
             self.sampling_rate,
             save_path,
+            aux_configs=aux_configs,
         )
         self.worker.progress.connect(self._update_grid_indicator)
         self.worker.finished.connect(self._on_file_decomposition_finished)

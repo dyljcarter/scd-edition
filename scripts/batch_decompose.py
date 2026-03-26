@@ -13,6 +13,13 @@ Usage
         [--bad-channels  Grid_1:63  Grid_2:63] \\
         [--params  sil_threshold=0.85  iterations=200]
 
+    # Concatenate two runs and decompose as one signal:
+    python scripts/batch_decompose.py \\
+        --channel-config channel_config.json \\
+        --files subject_run_01.h5 subject_run_02.h5 \\
+        --concat \\
+        --output results/
+
 Arguments
 ─────────
 --config      Session YAML (defines ports, electrodes, channel assignments).
@@ -27,6 +34,13 @@ Arguments
               decomposition (same as the GUI's channel rejection).
 --params      Override decomposition parameters, e.g.
               --params sil_threshold=0.90 iterations=300 peel_off=True
+--concat      Concatenate all --files along the time axis and decompose them
+              as a single signal instead of decomposing each file separately.
+              When --rejections-file is provided, per-file time masks are
+              automatically offset to the correct position in the concatenated
+              signal; channel masks are OR-combined across files.
+--concat-stem Custom output filename stem when --concat is used.
+              Default: auto-generated from the input file names.
 
 All decomposition defaults match the GUI's automatic-mode defaults.
 """
@@ -71,35 +85,61 @@ def _load_per_file_rejections(
     json_path: Path,
     file_path: Path,
     grid_configs: dict,
-) -> List[np.ndarray]:
+) -> tuple:
     """
-    Load per-file rejection masks from a channel_rejections.json produced by
-    batch_channel_check.py.  Falls back to all-zeros if the file is not found
-    in the JSON.
+    Load per-file rejection masks and time masks from a rejections JSON produced
+    by batch_channel_check.py.  Falls back to all-zeros / empty if not found.
+
+    Supports both the old format (grid value = list of ints) and the new format
+    (grid value = {"channels": [...], "time_masks": [[start_s, end_s], ...]}).
+
+    Returns
+    -------
+    channel_masks : List[np.ndarray]   one binary mask per grid
+    time_masks    : List[List]         per grid: list of [start_s, end_s] pairs
     """
     with open(json_path) as f:
         data = json.load(f)
 
     fname  = file_path.name
     entry  = data.get(fname, {})
-    masks  = []
+    masks: List[np.ndarray] = []
+    all_time_masks: List[List] = []
+
     for port_name, config in grid_configs.items():
-        n    = len(config["channels"])
+        n     = len(config["channels"])
         saved = entry.get(port_name)
-        if saved is not None:
+        if saved is None:
+            mask            = np.zeros(n, dtype=int)
+            grid_time_masks = []
+        elif isinstance(saved, list):
+            # Old format: plain channel-mask array
             mask = np.array(saved, dtype=int)
             if len(mask) != n:
                 print(f"  Warning: rejection mask length mismatch for "
                       f"{port_name} in {fname} — resetting.")
                 mask = np.zeros(n, dtype=int)
+            grid_time_masks = []
         else:
-            mask = np.zeros(n, dtype=int)
-        masks.append(mask)
+            # New format: {"channels": [...], "time_masks": [...]}
+            ch   = saved.get("channels", [0] * n)
+            mask = np.array(ch, dtype=int)
+            if len(mask) != n:
+                print(f"  Warning: rejection mask length mismatch for "
+                      f"{port_name} in {fname} — resetting.")
+                mask = np.zeros(n, dtype=int)
+            grid_time_masks = saved.get("time_masks", [])
 
-    n_rej = sum(int(m.sum()) for m in masks)
+        masks.append(mask)
+        all_time_masks.append(grid_time_masks)
+
+    n_rej   = sum(int(m.sum()) for m in masks)
+    n_tmask = sum(len(tm) for tm in all_time_masks)
     if n_rej:
         print(f"  Loaded rejections for {fname}: {n_rej} channel(s) rejected")
-    return masks
+    if n_tmask:
+        print(f"  Loaded time masks for {fname}: {n_tmask} region(s)")
+    return masks, all_time_masks
 
 
 def _setup_from_channel_config(json_path: Path, param_overrides: dict) -> tuple:
@@ -228,7 +268,8 @@ def decompose_files(
     bad_channel_masks: List[np.ndarray],
     sampling_rate: int,
     output_dir: Path,
-    plateau_s: Optional[tuple] = None,   # (start_s, end_s) in seconds, or None = full file
+    plateau_s: Optional[tuple] = None,        # (start_s, end_s) in seconds, or None = full file
+    time_masks_per_grid: Optional[List] = None,  # per-grid list of [start_s, end_s] pairs
     verbose: bool = True,
 ):
     """
@@ -270,17 +311,129 @@ def decompose_files(
         save_path = output_dir / f"{stem}_decomp_output.pkl"
 
         worker = _HeadlessWorker(
-            emg_data         = emg,
-            grid_configs     = grid_configs,
-            rejected_channels= bad_channel_masks,
-            plateau_coords   = plateau_coords,
-            sampling_rate    = sampling_rate,
-            save_path        = save_path,
+            emg_data            = emg,
+            grid_configs        = grid_configs,
+            rejected_channels   = bad_channel_masks,
+            plateau_coords      = plateau_coords,
+            sampling_rate       = sampling_rate,
+            save_path           = save_path,
+            time_masks_per_grid = time_masks_per_grid or [],
         )
         worker.run()
 
         elapsed = time.perf_counter() - t0
         print(f"  Done in {elapsed:.1f}s → {save_path}")
+
+
+def decompose_concatenated(
+    file_paths: List[Path],
+    layout: dict,
+    grid_configs: dict,
+    bad_channel_masks_per_file: List[List[np.ndarray]],
+    sampling_rate: int,
+    output_dir: Path,
+    plateau_s: Optional[tuple] = None,
+    time_masks_per_grid_per_file: Optional[List[List[List]]] = None,
+    output_stem: Optional[str] = None,
+):
+    """
+    Load all files, concatenate along the time axis, then decompose as one signal.
+
+    bad_channel_masks_per_file : list (one entry per file) of per-grid masks.
+        Channel masks are OR-combined across files so any channel rejected in
+        any file is rejected for the whole concatenated signal.
+    time_masks_per_grid_per_file : list (one entry per file) of per-grid
+        time-mask lists.  Each mask's timestamps are automatically offset by
+        the cumulative file length so they remain valid in the concatenated signal.
+    output_stem : override the auto-generated output filename stem.
+    """
+    from scd_app.io.data_loader import load_field
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\nConcatenating {len(file_paths)} file(s):")
+    segments = []
+    sample_offsets = [0]          # start sample index of each file in the concat
+    for fp in file_paths:
+        print(f"  Loading {fp.name} …")
+        try:
+            emg = load_field(fp, layout, "emg")
+        except Exception as exc:
+            print(f"  ERROR loading {fp.name}: {exc} — aborting concat.")
+            return
+        segments.append(emg)
+        sample_offsets.append(sample_offsets[-1] + emg.shape[0])
+
+    # load_field returns torch tensors; use torch.cat to preserve type
+    if torch.is_tensor(segments[0]):
+        emg_concat = torch.cat(segments, dim=0)
+    else:
+        emg_concat = np.concatenate(segments, axis=0)
+    total_s = emg_concat.shape[0] / sampling_rate
+    print(f"  Concatenated shape: {emg_concat.shape}  ({total_s:.2f} s)")
+
+    # ── combine channel masks (OR across files) ────────────────────────────────
+    n_grids = len(grid_configs)
+    combined_masks: List[np.ndarray] = []
+    for grid_idx in range(n_grids):
+        masks_for_grid = [
+            per_file[grid_idx]
+            for per_file in bad_channel_masks_per_file
+            if grid_idx < len(per_file)
+        ]
+        if masks_for_grid:
+            combined = np.zeros_like(masks_for_grid[0])
+            for m in masks_for_grid:
+                combined = np.logical_or(combined, m).astype(int)
+        else:
+            n = list(grid_configs.values())[grid_idx]["num_channels"]
+            combined = np.zeros(n, dtype=int)
+        combined_masks.append(combined)
+
+    # ── offset time masks ──────────────────────────────────────────────────────
+    merged_time_masks: List[List] = [[] for _ in range(n_grids)]
+    if time_masks_per_grid_per_file:
+        for file_i, file_masks in enumerate(time_masks_per_grid_per_file):
+            offset_s = sample_offsets[file_i] / sampling_rate
+            for grid_i, grid_masks in enumerate(file_masks):
+                for (t0, t1) in grid_masks:
+                    merged_time_masks[grid_i].append(
+                        [t0 + offset_s, t1 + offset_s])
+
+    # ── output path ───────────────────────────────────────────────────────────
+    if output_stem is None:
+        stems = [fp.stem for fp in file_paths]
+        if len(stems) <= 2:
+            output_stem = "_".join(stems) + "_concat"
+        else:
+            output_stem = f"{stems[0]}_to_{stems[-1]}_concat"
+    save_path = output_dir / f"{output_stem}_decomp_output.pkl"
+
+    # ── plateau ───────────────────────────────────────────────────────────────
+    if plateau_s is not None:
+        start_smp = int(round(plateau_s[0] * sampling_rate))
+        end_smp   = int(round(plateau_s[1] * sampling_rate))
+        start_smp = max(0, min(start_smp, emg_concat.shape[0]))
+        end_smp   = max(start_smp + 1, min(end_smp, emg_concat.shape[0]))
+        plateau_coords = np.array([start_smp, end_smp])
+        print(f"  Plateau : {plateau_s[0]}s – {plateau_s[1]}s  "
+              f"(samples {start_smp}–{end_smp})")
+    else:
+        plateau_coords = np.array([0, emg_concat.shape[0]])
+
+    t0 = time.perf_counter()
+    worker = _HeadlessWorker(
+        emg_data            = emg_concat,
+        grid_configs        = grid_configs,
+        rejected_channels   = combined_masks,
+        plateau_coords      = plateau_coords,
+        sampling_rate       = sampling_rate,
+        save_path           = save_path,
+        time_masks_per_grid = merged_time_masks,
+    )
+    worker.run()
+    elapsed = time.perf_counter() - t0
+    print(f"  Done in {elapsed:.1f}s → {save_path}")
 
 
 class _HeadlessWorker:
@@ -291,14 +444,16 @@ class _HeadlessWorker:
     """
 
     def __init__(self, emg_data, grid_configs, rejected_channels,
-                 plateau_coords, sampling_rate, save_path):
-        self.emg_data          = emg_data
-        self.grid_configs      = grid_configs
-        self.rejected_channels = rejected_channels
-        self.plateau_coords    = plateau_coords
-        self.sampling_rate     = sampling_rate
-        self.save_path         = save_path
-        self._is_running       = True
+                 plateau_coords, sampling_rate, save_path,
+                 time_masks_per_grid=None):
+        self.emg_data            = emg_data
+        self.grid_configs        = grid_configs
+        self.rejected_channels   = rejected_channels
+        self.plateau_coords      = plateau_coords
+        self.sampling_rate       = sampling_rate
+        self.save_path           = save_path
+        self.time_masks_per_grid = time_masks_per_grid or []
+        self._is_running         = True
 
     # Mimic Qt signals as no-ops so we can share the run() implementation
     class _Signal:
@@ -357,14 +512,15 @@ class _HeadlessWorker:
                           f"{port_name} — resetting.")
                     rejected = np.zeros(len(channels), dtype=int)
 
+                good_channels = np.where(rejected == 0)[0]
+                noise_std = (
+                    grid_data[:, good_channels].std().item()
+                    if len(good_channels) > 0 else 1e-6
+                )
+
                 bad_channels = np.where(rejected == 1)[0]
                 if len(bad_channels) > 0:
                     print(f"    Masked channels : {list(bad_channels)}")
-                    good_channels = np.where(rejected == 0)[0]
-                    noise_std = (
-                        grid_data[:, good_channels].std().item()
-                        if len(good_channels) > 0 else 1e-6
-                    )
                     gen = torch.Generator()
                     gen.manual_seed(42)
                     noise = torch.randn(
@@ -373,6 +529,26 @@ class _HeadlessWorker:
                     grid_data[:, bad_channels] = noise
                 else:
                     print(f"    Masked channels : none")
+
+                # Apply time masks: replace all channels in masked segments with noise
+                grid_time_masks = (
+                    self.time_masks_per_grid[grid_idx]
+                    if grid_idx < len(self.time_masks_per_grid) else []
+                )
+                for (t_start_s, t_end_s) in grid_time_masks:
+                    t_start = int(round(t_start_s * self.sampling_rate))
+                    t_end   = int(round(t_end_s   * self.sampling_rate))
+                    t_start = max(0, min(t_start, grid_data.shape[0]))
+                    t_end   = max(t_start + 1, min(t_end, grid_data.shape[0]))
+                    n_samp  = t_end - t_start
+                    gen_t   = torch.Generator()
+                    gen_t.manual_seed(43 + t_start)
+                    noise_t = torch.randn(
+                        n_samp, grid_data.shape[1], generator=gen_t
+                    ) * noise_std
+                    grid_data[t_start:t_end, :] = noise_t
+                    print(f"    Time masked : {t_start_s:.3f}s – {t_end_s:.3f}s  "
+                          f"({n_samp} samples)")
 
                 start_sample = int(self.plateau_coords[0])
                 end_sample   = int(self.plateau_coords[1])
@@ -466,6 +642,13 @@ def main():
     ap.add_argument("--params",  nargs="*", default=[],
                     metavar="KEY=VALUE",
                     help="Override decomp params, e.g.  sil_threshold=0.90")
+    ap.add_argument("--concat", action="store_true", default=False,
+                    help="Concatenate all --files along the time axis and "
+                         "decompose as a single signal instead of processing "
+                         "each file separately.")
+    ap.add_argument("--concat-stem", default=None, metavar="STEM",
+                    help="Output filename stem when --concat is used "
+                         "(default: auto-generated from input file names).")
     args = ap.parse_args()
 
     # ── load config ───────────────────────────────────────────────────────────
@@ -543,21 +726,54 @@ def main():
         print(f"Rejections: loaded per-file from {rejections_path}")
 
     t_total = time.perf_counter()
-    for file_idx, file_path in enumerate(file_paths):
-        if rejections_path:
-            masks = _load_per_file_rejections(rejections_path, file_path, grid_configs)
-        else:
-            masks = bad_masks
-        out = output_dir if output_dir else file_path.parent
-        decompose_files(
-            file_paths        = [file_path],
-            layout            = layout,
-            grid_configs      = grid_configs,
-            bad_channel_masks = masks,
-            sampling_rate     = fs,
-            plateau_s         = plateau_s,
-            output_dir        = out,
+
+    if args.concat:
+        # ── concatenate all files and decompose as one ─────────────────────
+        masks_per_file: List[List[np.ndarray]] = []
+        time_masks_per_file: List[List[List]] = []
+        for file_path in file_paths:
+            if rejections_path:
+                m, tm = _load_per_file_rejections(
+                    rejections_path, file_path, grid_configs)
+            else:
+                m  = bad_masks
+                tm = [[] for _ in grid_configs]
+            masks_per_file.append(m)
+            time_masks_per_file.append(tm)
+
+        out = output_dir if output_dir else file_paths[0].parent
+        decompose_concatenated(
+            file_paths                  = file_paths,
+            layout                      = layout,
+            grid_configs                = grid_configs,
+            bad_channel_masks_per_file  = masks_per_file,
+            sampling_rate               = fs,
+            output_dir                  = out,
+            plateau_s                   = plateau_s,
+            time_masks_per_grid_per_file= time_masks_per_file,
+            output_stem                 = args.concat_stem,
         )
+    else:
+        # ── decompose each file separately (original behaviour) ────────────
+        for file_path in file_paths:
+            if rejections_path:
+                masks, file_time_masks = _load_per_file_rejections(
+                    rejections_path, file_path, grid_configs)
+            else:
+                masks           = bad_masks
+                file_time_masks = [[] for _ in grid_configs]
+            out = output_dir if output_dir else file_path.parent
+            decompose_files(
+                file_paths          = [file_path],
+                layout              = layout,
+                grid_configs        = grid_configs,
+                bad_channel_masks   = masks,
+                sampling_rate       = fs,
+                plateau_s           = plateau_s,
+                time_masks_per_grid = file_time_masks,
+                output_dir          = out,
+            )
+
     elapsed = time.perf_counter() - t_total
     print(f"\nAll done in {elapsed:.1f}s.")
 

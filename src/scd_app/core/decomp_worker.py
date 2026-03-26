@@ -32,6 +32,7 @@ class DecompositionWorker(QThread):
         plateau_coords: np.ndarray,
         sampling_rate: int,
         save_path: Path,
+        aux_configs: Optional[List[dict]] = None,
     ):
         super().__init__()
         self.emg_data = emg_data
@@ -40,6 +41,7 @@ class DecompositionWorker(QThread):
         self.plateau_coords = plateau_coords
         self.sampling_rate = sampling_rate
         self.save_path = save_path
+        self.aux_configs = aux_configs or []
         self._is_running = True
         self._partial_results = None  # (results_dict, total_mus) after each grid
 
@@ -311,7 +313,38 @@ class DecompositionWorker(QThread):
             else:
                 dewhitened_filters.append(None)
 
-        # 4. Build save dict
+        # 4. Aux channels — slice from full EMG array (source == "signal")
+        #    Each entry: {"data": np.ndarray (samples,), "meta": dict}
+        #    data is NOT time-cropped here; the full recording is preserved so
+        #    that force traces can be inspected outside the plateau window.
+        aux_channels_saved = []
+        if self.aux_configs:
+            full_np = data_np  # already (channels, samples) — all time
+            n_total_ch = full_np.shape[0]
+            for a in self.aux_configs:
+                s, e = int(a.get("start_chan", 0)), int(a.get("end_chan", 0))
+                if s >= e or e > n_total_ch:
+                    print(
+                        f"  [aux] Skipping {a.get('name', '?')}: "
+                        f"channel range [{s},{e}) out of range ({n_total_ch} ch)"
+                    )
+                    continue
+                sig = full_np[s:e, :].squeeze()  # (samples,) for single-ch aux
+                aux_channels_saved.append(
+                    {
+                        "data": sig,
+                        "meta": {
+                            k: v
+                            for k, v in a.items()
+                            if k not in ("start_chan", "end_chan")
+                        },
+                        "start_chan": s,
+                        "end_chan": e,
+                    }
+                )
+            print(f"  [aux] Saved {len(aux_channels_saved)} aux channel(s).")
+
+        # 5. Build save dict
         save_dict = {
             "version": 1.0,
             # Decomposition results
@@ -343,9 +376,10 @@ class DecompositionWorker(QThread):
                 for m in self.rejected_channels
             ],
             "electrodes": electrodes,
+            "aux_channels": aux_channels_saved,  # list of {data, meta, start_chan, end_chan}
         }
 
-        # 5. Write
+        # 6. Write
         save_path_obj = Path(self.save_path)
         save_path_obj.parent.mkdir(parents=True, exist_ok=True)
 

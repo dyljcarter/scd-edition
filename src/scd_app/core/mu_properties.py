@@ -221,7 +221,12 @@ def compute_unit_properties(
     props = MUProperties()
     props.n_spikes = int(np.sum(spike_train_col))
 
+    if props.n_spikes == 0:
+        props.muap_grid = None
+        return props
+
     if not _TOOLBOX_AVAILABLE or props.n_spikes < 2:
+        props.muap_grid = muap_grid
         return props
 
     # Reshape single-unit arrays to (n, 1) as toolbox expects
@@ -455,9 +460,9 @@ def recompute_unit_properties(
     spike_train_col = timestamps_to_spike_train(new_timestamps, n_samples)
     ipts_col = np.asarray(source, dtype=np.float64).flatten()[:n_samples]
 
-    # Try to recompute MUAP if we have fresh EMG
-    muap_grid = mu_props.muap_grid  # reuse existing by default
-    if emg_port is not None and _TOOLBOX_AVAILABLE:
+    # Recompute MUAP from EMG when spikes exist; clear it when there are none
+    muap_grid = None if len(new_timestamps) == 0 else mu_props.muap_grid
+    if len(new_timestamps) > 0 and emg_port is not None and _TOOLBOX_AVAILABLE:
         try:
             if grid_positions is not None and grid_shape is not None:
                 emg_grid = flat_channels_to_grid(emg_port, grid_positions, grid_shape)
@@ -467,10 +472,13 @@ def recompute_unit_properties(
 
             st1 = spike_train_col.reshape(-1, 1)
             muaps_new = tb_props.get_muaps(st1, emg_grid, fs=fsamp_int, win_ms=win_ms)
-            muaps_new = tb_props.center_muaps(muaps_new)
+            try:
+                muaps_new = tb_props.center_muaps(muaps_new)
+            except (ValueError, IndexError):
+                pass  # use uncentred MUAPs — still valid for display
             muap_grid = muaps_new[0]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  [mu_props] MUAP recompute failed: {e}")
 
     return compute_unit_properties(
         timestamps=new_timestamps,

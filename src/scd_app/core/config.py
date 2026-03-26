@@ -70,11 +70,14 @@ class SessionConfig:
     input_dir: str = "data/input"
     emg_paths: List[str] = field(default_factory=list)
     output_dir: str = "data/output"
-    
+
+    # Auxiliary channels (force, EMG reference, etc.) from the channel config JSON
+    aux_channels: List[Dict[str, Any]] = field(default_factory=list)
+
     # Edition settings
     auto_save: bool = True
     undo_levels: int = 50
-    
+
     # Analysis thresholds
     roa_threshold: float = 0.3
     subset_threshold: float = 0.8
@@ -159,6 +162,7 @@ class ConfigManager:
             ports=ports,
             input_dir=data.get("input_dir", ""),
             output_dir=data.get("output_dir", ""),
+            aux_channels=data.get("aux_channels", []),
             auto_save=data.get("auto_save", True),
             undo_levels=data.get("undo_levels", 50),
         )

@@ -619,10 +619,15 @@ def recalculate_unit_filter(
     source_t = (source_t - mu) / std
     source_t = torch.nan_to_num(source_t, nan=0.0, posinf=0.0, neginf=0.0)
 
+    # ── Step 5: Re-detect spike times from new source ─────────────────────
+    new_timestamps_abs = _extract_timestamps(
+        source_t, fn, min_peak_sep=min_peak_sep, square_source=square_source
+    )
 
     return (
         filt.detach().cpu().numpy(),
-        source_t.detach().cpu().numpy().astype(np.float64)
+        source_t.detach().cpu().numpy().astype(np.float64),
+        new_timestamps_abs,
     )
 
 def supports_filter_recalculation(decomp_data: dict) -> Tuple[bool, str]:
