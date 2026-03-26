@@ -1,75 +1,72 @@
 from PyQt5.QtGui import QFontDatabase
+from pathlib import Path
 
-FONT_FAMILY = 'Lexend'
+FONT_FAMILY = "Lexend"
 
 COLORS = {
     # Backgrounds
-    'background': '#0e1318',
-    'background_light': '#161b20',
-    'background_input': '#1a1f24',
-    'background_hover': '#1e242b',
-    
+    "background": "#0e1318",
+    "background_light": "#161b20",
+    "background_input": "#1a1f24",
+    "background_hover": "#1e242b",
     # Text
-    'foreground': '#e8eaed',
-    'text_dim': '#9da3ab',
-    'text_muted': '#5a6169',
-    'text_secondary': '#A0AEC0',
-    
+    "foreground": "#e8eaed",
+    "text_dim": "#9da3ab",
+    "text_muted": "#5a6169",
+    "text_secondary": "#A0AEC0",
     # Borders
-    'border': '#2d3139',
-    
+    "border": "#2d3139",
     # Accent (Imperial Blue)
-    'accent': '#003E74',
-    'accent_hover': '#004a8f',
-    'accent_light': '#005aa6',
-    
+    "accent": "#003E74",
+    "accent_hover": "#004a8f",
+    "accent_light": "#005aa6",
     # Semantic colors
-    'success': '#48BB78',
-    'warning': '#F6AD55',
-    'error': '#FC8181',
-    'error_bright': '#F85149',
-    'info': '#4a9eff',
-    'info_light': '#63B3ED',
-    
+    "success": "#48BB78",
+    "warning": "#F6AD55",
+    "error": "#FC8181",
+    "error_bright": "#F85149",
+    "info": "#4a9eff",
+    "info_light": "#63B3ED",
     # Additional accent colors
-    'pink': '#ff6b9d',
-    'purple': '#a78bfa',
+    "pink": "#ff6b9d",
+    "purple": "#a78bfa",
 }
 
 FONT_SIZES = {
-    'tiny': '9pt',       # File paths, metadata
-    'small': '10pt',     # Status text, secondary info
-    'normal': '11pt',    # Default body text, buttons
-    'medium': '12pt',    # Emphasized text, form labels
-    'large': '13pt',     # Section headers
-    'xlarge': '14pt',    # Major headings, dialog section titles
-    'title': '16pt',     # Dialog titles, main headers
-    'huge': '18pt',      # Big dialog titles
-    'display': '22pt',   # Large display text (timers, counters)
-    'countdown': '24pt', # Countdown displays
+    "tiny": "9pt",  # File paths, metadata
+    "small": "10pt",  # Status text, secondary info
+    "normal": "11pt",  # Default body text, buttons
+    "medium": "12pt",  # Emphasized text, form labels
+    "large": "13pt",  # Section headers
+    "xlarge": "14pt",  # Major headings, dialog section titles
+    "title": "16pt",  # Dialog titles, main headers
+    "huge": "18pt",  # Big dialog titles
+    "display": "22pt",  # Large display text (timers, counters)
+    "countdown": "24pt",  # Countdown displays
 }
 
 
 SPACING = {
-    'xs': 5,
-    'sm': 10,
-    'md': 15,
-    'lg': 20,
-    'xl': 30,
+    "xs": 5,
+    "sm": 10,
+    "md": 15,
+    "lg": 20,
+    "xl": 30,
 }
+
 
 def get_label_style(
     color: str = None,
-    size: str = 'normal',
+    size: str = "normal",
     bold: bool = False,
     italic: bool = False,
     margin_top: int = 0,
     margin_bottom: int = 0,
-    padding: int = 0
+    padding: int = 0,
 ) -> str:
     """
     Generate consistent label stylesheet string.
-    
+
     Args:
         color: Color key from COLORS dict or hex string
         size: Size key from FONT_SIZES dict ('tiny', 'small', 'normal', etc.)
@@ -78,86 +75,88 @@ def get_label_style(
         margin_top: Top margin in pixels
         margin_bottom: Bottom margin in pixels
         padding: Padding in pixels
-    
+
     Returns:
         CSS stylesheet string
-    
+
     Example:
         label.setStyleSheet(get_label_style(color='warning', size='large', bold=True))
     """
     # Resolve color
     if color is None:
-        color_value = COLORS['foreground']
+        color_value = COLORS["foreground"]
     elif color in COLORS:
         color_value = COLORS[color]
     else:
         color_value = color  # Assume it's a hex string
-    
+
     # Resolve font size
-    font_size = FONT_SIZES.get(size, FONT_SIZES['normal'])
-    
+    font_size = FONT_SIZES.get(size, FONT_SIZES["normal"])
+
     # Build style
     style_parts = [
         f"color: {color_value}",
         f"font-size: {font_size}",
     ]
-    
+
     if bold:
         style_parts.append("font-weight: bold")
-    
+
     if italic:
         style_parts.append("font-style: italic")
-    
+
     if margin_top > 0:
         style_parts.append(f"margin-top: {margin_top}px")
-    
+
     if margin_bottom > 0:
         style_parts.append(f"margin-bottom: {margin_bottom}px")
-    
+
     if padding > 0:
         style_parts.append(f"padding: {padding}px")
-    
+
     return "; ".join(style_parts) + ";"
 
 
-def get_section_header_style(color: str = 'info', margin_top: int = None) -> str:
+def get_section_header_style(color: str = "info", margin_top: int = None) -> str:
     """
     Get consistent section header style.
-    
+
     Args:
         color: Color key from COLORS dict
         margin_top: Top margin in pixels (default: SPACING['lg'] = 20)
-    
+
     Returns:
         CSS stylesheet string for section headers
     """
     if margin_top is None:
-        margin_top = SPACING['lg']
-    return get_label_style(color=color, size='large', bold=True, margin_top=margin_top)
+        margin_top = SPACING["lg"]
+    return get_label_style(color=color, size="large", bold=True, margin_top=margin_top)
 
 
 def get_button_style(
     bg_color: str = None,
-    text_color: str = 'foreground',
-    size: str = 'normal',
-    padding: int = 10
+    text_color: str = "foreground",
+    size: str = "normal",
+    padding: int = 10,
 ) -> str:
     """
     Generate custom button stylesheet.
-    
+
     Args:
         bg_color: Background color key from COLORS dict
         text_color: Text color key from COLORS dict
         size: Font size key from FONT_SIZES dict
         padding: Padding in pixels
-    
+
     Returns:
         CSS stylesheet string for buttons
     """
-    bg = COLORS.get(bg_color, COLORS['text_muted']) if bg_color else COLORS['text_muted']
-    fg = COLORS.get(text_color, COLORS['foreground'])
-    font_size = FONT_SIZES.get(size, FONT_SIZES['normal'])
-    
+    bg = (
+        COLORS.get(bg_color, COLORS["text_muted"]) if bg_color else COLORS["text_muted"]
+    )
+    fg = COLORS.get(text_color, COLORS["foreground"])
+    font_size = FONT_SIZES.get(size, FONT_SIZES["normal"])
+
     return f"""
         QPushButton {{
             background-color: {bg};
@@ -167,40 +166,46 @@ def get_button_style(
         }}
     """
 
+
 def load_font(font_type="Lexend"):
     """Load custom fonts into Qt application."""
-    
+
+    _font_dir = Path(__file__).parent / "fonts"
+
     if font_type == "Lexend":
         font_files = [
-            "src/scd_app/gui/style/fonts/Lexend-Regular.ttf",
-            "src/scd_app/gui/style/fonts/Lexend-Light.ttf",
-            "src/scd_app/gui/style/fonts/Lexend-Medium.ttf",
-            "src/scd_app/gui/style/fonts/Lexend-SemiBold.ttf",
-            "src/scd_app/gui/style/fonts/Lexend-Bold.ttf",
-            "src/scd_app/gui/style/fonts/Lexend-ExtraBold.ttf",
+            "Lexend-Regular.ttf",
+            "Lexend-Light.ttf",
+            "Lexend-Medium.ttf",
+            "Lexend-SemiBold.ttf",
+            "Lexend-Bold.ttf",
+            "Lexend-ExtraBold.ttf",
         ]
     elif font_type == "Figtree":
         font_files = [
-            "src/scd_app/gui/style/fonts/Figtree-Regular.ttf",
-            "src/scd_app/gui/style/fonts/Figtree-Medium.ttf",
-            "src/scd_app/gui/style/fonts/Figtree-SemiBold.ttf",
-            "src/scd_app/gui/style/fonts/Figtree-Bold.ttf",
+            "Figtree-Regular.ttf",
+            "Figtree-Medium.ttf",
+            "Figtree-SemiBold.ttf",
+            "Figtree-Bold.ttf",
         ]
     elif font_type == "Inter":
         font_files = [
-            "src/scd_app/gui/style/fonts/Inter-Regular.ttf",
-            "src/scd_app/gui/style/fonts/Inter-Medium.ttf",
-            "src/scd_app/gui/style/fonts/Inter-SemiBold.ttf",
-            "src/scd_app/gui/style/fonts/Inter-ExtraBold.ttf",
+            "Inter-Regular.ttf",
+            "Inter-Medium.ttf",
+            "Inter-SemiBold.ttf",
+            "Inter-ExtraBold.ttf",
         ]
     else:
-        raise ValueError("Unsupported font type. Choose 'Lexend', 'Figtree', or 'Inter'.")
-    
+        raise ValueError(
+            "Unsupported font type. Choose 'Lexend', 'Figtree', or 'Inter'."
+        )
+
     for font_file in font_files:
-        font_id = QFontDatabase.addApplicationFont(font_file)
+        font_path = _font_dir / font_file
+        font_id = QFontDatabase.addApplicationFont(str(font_path))
         if font_id < 0:
-            print(f"Warning: Could not load font {font_file}")
-    
+            print(f"Warning: Could not load font {font_path}")
+
     return font_type
 
 
@@ -800,4 +805,3 @@ def set_style_sheet(widget, font_type="Lexend"):
             }}
         """
     )
-
