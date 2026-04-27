@@ -56,7 +56,6 @@ from scd_app.core.mu_properties import (
 from scd_app.gui.widgets.mu_properties_panel import MUPropertiesPanel
 from scd_app.core.filter_recalculation import (
     recalculate_unit_filter,
-    recalculate_unit_centroid,
     supports_filter_recalculation,
     supports_full_source_computation,
     compute_all_full_sources,
@@ -1203,6 +1202,7 @@ class EditionTab(QWidget):
         self._start_sample: int = 0
         self._end_sample: int = 0
         self._full_source_mode: bool = False
+        self._redetect_timestamps: bool = True
 
         self._undo_stack: List[UndoAction] = []
         self._redo_stack: List[UndoAction] = []
@@ -1566,19 +1566,6 @@ class EditionTab(QWidget):
         self.btn_recalc_filter.setEnabled(False)
         lay.addWidget(self.btn_recalc_filter)
 
-        # ── Recalculate Centroid ─────────────────────────────────────────
-        self.btn_recalc_centroid = QPushButton("⟳ Recalculate Centroid")
-        self.btn_recalc_centroid.setStyleSheet(base_btn_style)
-        self.btn_recalc_centroid.setShortcut(QKeySequence("C"))
-        self.btn_recalc_centroid.setToolTip(
-            "Re-run SCD amplitude clustering on the current source [C]\n"
-            "Finds peaks in the source/IPT, then k-means (100 iter) separates\n"
-            "true spikes from noise. Does not recompute the filter. Undoable."
-        )
-        self.btn_recalc_centroid.clicked.connect(self._recalculate_centroid)
-        self.btn_recalc_centroid.setEnabled(False)
-        lay.addWidget(self.btn_recalc_centroid)
-
         # ── Per-MU actions ───────────────────────────────────────────────
         lay.addSpacing(6)
 
@@ -1870,6 +1857,21 @@ class EditionTab(QWidget):
             if reply == QMessageBox.Yes:
                 data["skip_filter_recalc"] = False
 
+        can_full, _ = supports_full_source_computation(data)
+        if can_full and not data.get("skip_filter_recalc"):
+            reply = QMessageBox.question(
+                self,
+                "Recalculate Timestamps?",
+                "Do you want to recalculate spike timestamps on the full signal?\n\n"
+                "Yes — re-detect timestamps from the source over the entire recording.\n"
+                "No  — keep the original timestamps from the decomposed section only.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            self._redetect_timestamps = reply == QMessageBox.Yes
+        else:
+            self._redetect_timestamps = True
+
         try:
             self._load_decomposition_data(data)
             self._loaded_path = path
@@ -1914,7 +1916,8 @@ class EditionTab(QWidget):
             try:
                 self._update_status("Computing full-length sources (peel-off replay)…")
                 full_port_results, start_sample, end_sample, err = (
-                    compute_all_full_sources(decomp_data)
+                    compute_all_full_sources(decomp_data,
+                                            redetect_timestamps=self._redetect_timestamps)
                 )
                 if err:
                     print(f"  [edition] Full source warning: {err}")
@@ -1985,10 +1988,13 @@ class EditionTab(QWidget):
             if emg_full is not None:
                 valid_chs = global_active[global_active < emg_full.shape[0]]
                 if len(valid_chs) > 0:
-                    emg_port = emg_full[
-                        valid_chs,
-                        max(0, start_sample) : min(end_sample, emg_full.shape[1]),
-                    ]
+                    if self._full_source_mode:
+                        emg_port = emg_full[valid_chs, :]
+                    else:
+                        emg_port = emg_full[
+                            valid_chs,
+                            max(0, start_sample) : min(end_sample, emg_full.shape[1]),
+                        ]
                     valid_port_chs = port_ch_idx[port_ch_idx < emg_full.shape[0]]
                     self._raw_port_channels[port_name] = emg_full[valid_port_chs, :]
 
@@ -2062,21 +2068,8 @@ class EditionTab(QWidget):
             grid_cfg = get_grid_config(etype)
 
             if motor_units:
-                if self._full_source_mode:
-                    props_ts = [
-                        self._ts_to_plateau_local(mu.timestamps) for mu in motor_units
-                    ]
-                    props_src = [
-                        (
-                            mu.source[start_sample:end_sample]
-                            if len(mu.source) > (end_sample - start_sample)
-                            else mu.source
-                        )
-                        for mu in motor_units
-                    ]
-                else:
-                    props_ts = [mu.timestamps for mu in motor_units]
-                    props_src = [mu.source for mu in motor_units]
+                props_ts = [mu.timestamps for mu in motor_units]
+                props_src = [mu.source for mu in motor_units]
 
                 props_list = compute_port_properties(
                     all_timestamps=props_ts,
@@ -2119,7 +2112,6 @@ class EditionTab(QWidget):
             self.btn_recalc_filter.setToolTip(f"Unavailable: {reason}")
 
         for btn in (
-            self.btn_recalc_centroid,
             self.btn_remove_outliers,
             self.btn_flag_delete,
             self.btn_auto_edit_mu,
@@ -2600,54 +2592,6 @@ class EditionTab(QWidget):
             QMessageBox.critical(self, "Recalculation Error", str(e))
             self._update_status("Filter recalculation failed")
 
-    def _recalculate_centroid(self):
-        mu = self._current_mu()
-        if mu is None:
-            self._update_status("Select a motor unit first")
-            return
-        if mu.source is None or len(mu.source) == 0:
-            self._update_status("No source available for centroid recalculation")
-            return
-
-        # In full-source mode mu.source spans the full recording — crop to the
-        # plateau window and convert returned plateau-local indices to absolute.
-        if self._full_source_mode:
-            source_slice = mu.source[self._start_sample : self._end_sample]
-        else:
-            source_slice = mu.source
-
-        if len(source_slice) == 0:
-            self._update_status("Empty source slice — check plateau region")
-            return
-
-        self._update_status(f"Recalculating centroid for MU {mu.id}…")
-        try:
-            new_ts_local = recalculate_unit_centroid(source_slice)
-            new_timestamps = (
-                self._ts_to_absolute(new_ts_local)
-                if self._full_source_mode
-                else new_ts_local
-            )
-
-            old_timestamps = mu.timestamps.copy()
-            mu.timestamps = new_timestamps
-
-            self._push_undo(
-                UndoAction(
-                    description=f"Recalculate centroid MU {mu.id}",
-                    port_name=self._current_port,
-                    mu_idx=self._current_mu_idx,
-                    old_timestamps=old_timestamps,
-                    new_timestamps=new_timestamps,
-                )
-            )
-            self._on_data_changed(f"Centroid recalculated for MU {mu.id}")
-
-        except Exception as e:
-            traceback.print_exc()
-            QMessageBox.critical(self, "Centroid Recalculation Error", str(e))
-            self._update_status("Centroid recalculation failed")
-
     def _global_unit_idx(self, port_name: str, mu_idx: int) -> Optional[int]:
         offset = 0
         for pname, mus in self._ports.items():
@@ -2947,21 +2891,10 @@ class EditionTab(QWidget):
             grid_cfg = self._grid_info.get(self._current_port)
             emg_port = self._emg_data.get(self._current_port)
 
-            if self._full_source_mode:
-                props_ts = self._ts_to_plateau_local(mu.timestamps)
-                props_source = (
-                    mu.source[self._start_sample : self._end_sample]
-                    if len(mu.source) > (self._end_sample - self._start_sample)
-                    else mu.source
-                )
-            else:
-                props_ts = mu.timestamps
-                props_source = mu.source
-
             mu.props = recompute_unit_properties(
                 mu_props=mu.props or MUProperties(),
-                new_timestamps=props_ts,
-                source=props_source,
+                new_timestamps=mu.timestamps,
+                source=mu.source,
                 emg_port=emg_port,
                 grid_positions=grid_cfg["positions"] if grid_cfg else None,
                 grid_shape=grid_cfg["grid_shape"] if grid_cfg else None,

@@ -61,6 +61,8 @@ class MUProperties:
     # ── quality metrics ───────────────────────────────────────────────────
     sil: float = float("nan")                  # silhouette measure  [0-1]
     pnr_db: float = float("nan")               # pulse-to-noise ratio  (dB)
+    spike_centroid: float = float("nan")       # mean source² at spike peaks
+    noise_centroid: float = float("nan")       # mean source² at non-spike peaks
 
     # ── MUAP features (scalar summaries over the selected channels) ────────
     muap_max_ptp_uv: float = float("nan")      # max PTP across channels
@@ -187,6 +189,37 @@ def timestamps_to_time_axis(
 # Core computation
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _compute_centroids(
+    source: np.ndarray,
+    timestamps: np.ndarray,
+    min_peak_sep: int = 30,
+) -> tuple:
+    """Return (spike_centroid, noise_centroid) from source² peak amplitudes.
+
+    Spike centroid  = mean of source² at spike positions.
+    Noise centroid  = mean of source² at all detected peaks that are NOT spikes.
+    Uses scipy.signal.find_peaks; returns (nan, nan) if unavailable.
+    """
+    try:
+        from scipy.signal import find_peaks
+    except ImportError:
+        return float("nan"), float("nan")
+
+    src_sq = np.asarray(source, dtype=np.float64) ** 2
+    if len(src_sq) == 0 or len(timestamps) == 0:
+        return float("nan"), float("nan")
+
+    ts = timestamps[(timestamps >= 0) & (timestamps < len(src_sq))]
+    spike_centroid = float(np.mean(src_sq[ts])) if len(ts) > 0 else float("nan")
+
+    all_peaks, _ = find_peaks(src_sq, distance=min_peak_sep)
+    spike_set = set(ts.tolist())
+    noise_peaks = all_peaks[np.array([p not in spike_set for p in all_peaks])]
+    noise_centroid = float(np.mean(src_sq[noise_peaks])) if len(noise_peaks) > 0 else float("nan")
+
+    return spike_centroid, noise_centroid
+
+
 def _nanval(arr: np.ndarray, idx: int) -> float:
     """Safely extract a scalar from a toolbox-returned array."""
     try:
@@ -266,6 +299,8 @@ def compute_unit_properties(
         props.pnr_db = _nanval(pnr, 0)
     except Exception:
         pass
+
+    props.spike_centroid, props.noise_centroid = _compute_centroids(source, timestamps)
 
     # ── MUAP features ─────────────────────────────────────────────────────
     if muap_grid is not None and muap_grid.ndim == 3:

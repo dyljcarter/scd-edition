@@ -281,6 +281,7 @@ def _replay_peel_off_for_port(
     square_source: bool = True,
     use_saved_peel_timestamps: bool = False,
     recalculate_filters: bool = False,
+    redetect_timestamps: bool = True,
 ) -> Tuple[torch.Tensor, Dict[int, Tuple[np.ndarray, np.ndarray]]]:
     """Replay peel-off for one port, optionally stopping before a given unit.
 
@@ -359,10 +360,12 @@ def _replay_peel_off_for_port(
                     source_t  = None
                     source_np = None
 
-                # Re-detect timestamps from the computed source so that markers
-                # align with source peaks.  Peel still uses the original saved
-                # timestamps to preserve the decomposition's peel state.
-                if source_t is not None:
+                # Optionally re-detect timestamps from the full source so that
+                # markers align with source peaks across the full signal.
+                # When redetect_timestamps=False, use the stored plateau-local
+                # timestamps (already offset to absolute) so only the decomposed
+                # section is annotated.
+                if redetect_timestamps and source_t is not None:
                     ts_display = _extract_timestamps(
                         source_t, fn, min_peak_sep, square_source=square_source,
                     )
@@ -425,9 +428,16 @@ def _peel_with_original(
 def compute_all_full_sources(
     decomp_data: dict,
     device: Optional[torch.device] = None,
+    redetect_timestamps: bool = True,
 ) -> Tuple[Dict[int, List[Tuple[Optional[np.ndarray], Optional[np.ndarray]]]],
            int, int, str]:
-    """Compute full-length sources and re-detected timestamps for all MUs."""
+    """Compute full-length sources and timestamps for all MUs.
+
+    redetect_timestamps: when True (default) re-detect spike times from the
+    full source via source_to_timestamps.  When False the stored plateau-local
+    timestamps are used as-is (offset to absolute coords) — faster and avoids
+    picking up artefact peaks outside the decomposition window.
+    """
     if device is None:
         device = torch.device("cpu")
 
@@ -547,6 +557,7 @@ def compute_all_full_sources(
             global_offset, start_sample, end_sample, window_size, min_peak_sep, device,
             stop_before_local_idx=None, square_source=square_source,
             use_saved_peel_timestamps=True, recalculate_filters=True,
+            redetect_timestamps=redetect_timestamps,
         )
 
         port_results[port_idx] = [

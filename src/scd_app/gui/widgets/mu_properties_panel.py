@@ -179,9 +179,12 @@ class MUPropertiesPanel(QFrame):
 
         # — Quality —
         sec_quality = _Section("Quality")
-        self._r_sil = _MetricRow("SIL")
-        self._r_pnr = _MetricRow("PNR")
-        for r in (self._r_sil, self._r_pnr):
+        self._r_sil             = _MetricRow("SIL")
+        self._r_pnr             = _MetricRow("PNR")
+        self._r_spike_centroid  = _MetricRow("Spike centroid")
+        self._r_noise_centroid  = _MetricRow("Noise centroid")
+        for r in (self._r_sil, self._r_pnr,
+                  self._r_spike_centroid, self._r_noise_centroid):
             sec_quality.add_row(r)
         sections_layout.addWidget(sec_quality)
 
@@ -228,6 +231,8 @@ class MUPropertiesPanel(QFrame):
             _fmt(props.pnr_db, 1, "dB"),
             _color_for_flag(flags["pnr"], na=math.isnan(props.pnr_db))
         )
+        self._r_spike_centroid.set_value(_fmt(props.spike_centroid, 3))
+        self._r_noise_centroid.set_value(_fmt(props.noise_centroid, 3))
 
         # — MUAP —
         self._r_ptp.set_value(_fmt(props.muap_max_ptp_uv, 2, "µV"))
@@ -263,7 +268,7 @@ class MUPropertiesPanel(QFrame):
     def clear_properties(self):
         for row in (
             self._r_nspikes, self._r_dr, self._r_cov, self._r_min_isi,
-            self._r_sil, self._r_pnr,
+            self._r_sil, self._r_pnr, self._r_spike_centroid, self._r_noise_centroid,
             self._r_ptp, self._r_wl, self._r_peak_f, self._r_med_f,
         ):
             row.clear()
