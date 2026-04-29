@@ -75,7 +75,7 @@ class _MetricRow(QWidget):
 
         self._lbl = QLabel(label + ":")
         self._lbl.setStyleSheet(self._LABEL_STYLE)
-        self._lbl.setFixedWidth(130)
+        self._lbl.setFixedWidth(90)
 
         self._val = QLabel("—")
         self._val.setStyleSheet(self._VALUE_STYLE)
@@ -108,8 +108,8 @@ class _Section(QGroupBox):
                 font-weight: bold;
                 border: 1px solid {_C_BORD};
                 border-radius: 4px;
-                margin-top: 20px;
-                padding-top: 6px;
+                margin-top: 12px;
+                padding-top: 4px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
@@ -117,12 +117,17 @@ class _Section(QGroupBox):
                 padding: 0 4px;
             }}
         """)
-        self._inner = QVBoxLayout(self)
-        self._inner.setContentsMargins(8, 4, 8, 8)
+        self._inner = QGridLayout(self)
+        self._inner.setContentsMargins(8, 4, 8, 6)
         self._inner.setSpacing(2)
+        self._inner.setColumnStretch(0, 1)
+        self._inner.setColumnStretch(1, 1)
+        self._count = 0
 
     def add_row(self, row: _MetricRow):
-        self._inner.addWidget(row)
+        grid_row, grid_col = divmod(self._count, 2)
+        self._inner.addWidget(row, grid_row, grid_col)
+        self._count += 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -145,18 +150,17 @@ class MUPropertiesPanel(QFrame):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 4, 8, 4)
-        root.setSpacing(4)
+        root.setSpacing(2)
 
         # ── reliability badge (top row) ──────────────────────────────────
         badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
         self._reliability_badge = QLabel("● RELIABLE")
         self._reliability_badge.setStyleSheet(
             f"color: {_C_OK}; font-weight: bold; "
             f"font-size: {FONT_SIZES.get('small','9pt')}; font-family: {FONT_FAMILY};"
         )
         badge_row.addWidget(self._reliability_badge)
-        badge_row.addStretch()
-        root.addLayout(badge_row)
 
         _dup_style = (
             f"color: {_C_WARN}; font-size: {FONT_SIZES.get('small','9pt')};"
@@ -164,10 +168,14 @@ class MUPropertiesPanel(QFrame):
         )
         self._within_dup_label = QLabel()
         self._within_dup_label.setStyleSheet(_dup_style)
+        self._within_dup_label.setVisible(False)
         self._cross_dup_label = QLabel()
         self._cross_dup_label.setStyleSheet(_dup_style)
-        root.addWidget(self._within_dup_label)
-        root.addWidget(self._cross_dup_label)
+        self._cross_dup_label.setVisible(False)
+        badge_row.addWidget(self._within_dup_label)
+        badge_row.addWidget(self._cross_dup_label)
+        badge_row.addStretch()
+        root.addLayout(badge_row)
 
         # ── metric rows ──────────────────────────────────────────────────
         sections_layout = QHBoxLayout()
@@ -273,18 +281,19 @@ class MUPropertiesPanel(QFrame):
                 f"MU{mid} ({score:.0%})"
                 for (_, mid, score) in sorted(within_partners, key=lambda x: -x[2])
             )
-            self._within_dup_label.setText(f"⚠ Within-port duplicates: {parts}")
+            self._within_dup_label.setText(f"⚠ Within: {parts}")
+            self._within_dup_label.setVisible(True)
         elif props.duplicate_candidates:
-            # Fallback: show toolbox-computed candidates when no role assigned yet
             ids = ", ".join(
                 f"MU{k} ({v:.0%})"
                 for k, v in sorted(
                     props.duplicate_candidates.items(), key=lambda x: -x[1]
                 )
             )
-            self._within_dup_label.setText(f"⚠ Possible duplicates: {ids}")
+            self._within_dup_label.setText(f"⚠ Dups: {ids}")
+            self._within_dup_label.setVisible(True)
         else:
-            self._within_dup_label.setText("")
+            self._within_dup_label.setVisible(False)
 
         # — Cross-port duplicate partners —
         if cross_partners:
@@ -292,9 +301,10 @@ class MUPropertiesPanel(QFrame):
                 f"{pname} MU{mid} ({score:.0%})"
                 for (pname, mid, score) in sorted(cross_partners, key=lambda x: -x[2])
             )
-            self._cross_dup_label.setText(f"⚠ Cross-port duplicates: {parts}")
+            self._cross_dup_label.setText(f"⚠ Cross: {parts}")
+            self._cross_dup_label.setVisible(True)
         else:
-            self._cross_dup_label.setText("")
+            self._cross_dup_label.setVisible(False)
 
     def clear_properties(self):
         for row in (
@@ -308,8 +318,8 @@ class MUPropertiesPanel(QFrame):
             f"color: {_C_DIM}; font-weight: bold; "
             f"font-size: {FONT_SIZES.get('small','9pt')};"
         )
-        self._within_dup_label.setText("")
-        self._cross_dup_label.setText("")
+        self._within_dup_label.setVisible(False)
+        self._cross_dup_label.setVisible(False)
 
 
 # ── backwards-compatible thin bar  (for easy migration) ───────────────────────

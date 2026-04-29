@@ -1462,41 +1462,47 @@ class EditionTab(QWidget):
         self.action_redo.triggered.connect(self._redo)
         tb.addAction(self.action_redo)
 
-        # ── Global MU management ──────────────────────────────────────
+        # ── Per-MU editing ────────────────────────────────────────────
         tb.addSeparator()
-        self.btn_auto_flag = QPushButton("Auto-Flag Unreliable")
-        self.btn_auto_flag.setIcon(self._make_warning_icon())
-        self.btn_auto_flag.setToolTip(
-            "Flag all MUs with SIL < 0.9 across all ports for deletion.\n"
-            "Units with SIL ≥ 0.9 are left for manual review."
-        )
-        self.btn_auto_flag.clicked.connect(self._auto_flag_unreliable)
-        self.btn_auto_flag.setStyleSheet(self._warn_toolbar_btn_style())
-        self.btn_auto_flag.setEnabled(False)
-        tb.addWidget(self.btn_auto_flag)
 
-        tb.addSeparator()
-        _no_props_tip = "Compute MU properties first"
-
-        self.btn_flag_within_dups = QPushButton("⧉ Within-Port Dups")
-        self.btn_flag_within_dups.setToolTip(
-            "Flag lower-quality duplicate MUs within each grid/probe for deletion.\n"
-            "Uses rate-of-agreement (threshold 0.3) to identify duplicates."
+        self.btn_recalc_filter = QPushButton("⟳ Recalc Filter")
+        self.btn_recalc_filter.setShortcut(QKeySequence("F"))
+        self.btn_recalc_filter.setToolTip(
+            "Replay peel-off and recompute filter + source + timestamps [F]"
         )
-        self.btn_flag_within_dups.clicked.connect(self._flag_within_duplicates)
-        self.btn_flag_within_dups.setStyleSheet(self._warn_toolbar_btn_style())
-        self.btn_flag_within_dups.setEnabled(False)
-        tb.addWidget(self.btn_flag_within_dups)
+        self.btn_recalc_filter.clicked.connect(self._recalculate_filter)
+        self.btn_recalc_filter.setEnabled(False)
+        self.btn_recalc_filter.setStyleSheet(self._warn_toolbar_btn_style())
+        tb.addWidget(self.btn_recalc_filter)
 
-        self.btn_flag_cross_dups = QPushButton("⧉ Cross-Port Dups")
-        self.btn_flag_cross_dups.setToolTip(
-            "Flag lower-quality duplicate MUs across different grids/probes for deletion.\n"
-            "Uses rate-of-agreement (threshold 0.3) to identify duplicates."
+        self.btn_remove_outliers = QPushButton("⚡ Remove Outliers")
+        self.btn_remove_outliers.setShortcut(QKeySequence("O"))
+        self.btn_remove_outliers.setToolTip(
+            "Remove spikes causing outlier instantaneous firing rate [O]\n"
+            "Uses Tukey fence (Q75 + 1.5×IQR) on the IFR distribution."
         )
-        self.btn_flag_cross_dups.clicked.connect(self._flag_cross_duplicates)
-        self.btn_flag_cross_dups.setStyleSheet(self._warn_toolbar_btn_style())
-        self.btn_flag_cross_dups.setEnabled(False)
-        tb.addWidget(self.btn_flag_cross_dups)
+        self.btn_remove_outliers.clicked.connect(self._remove_outliers)
+        self.btn_remove_outliers.setEnabled(False)
+        self.btn_remove_outliers.setStyleSheet(self._warn_toolbar_btn_style())
+        tb.addWidget(self.btn_remove_outliers)
+
+        self.btn_flag_delete = QPushButton("🗑 Flag to Delete")
+        self.btn_flag_delete.setToolTip("Toggle deletion flag for the current MU [X]")
+        self.btn_flag_delete.clicked.connect(self._toggle_flag_delete)
+        self.btn_flag_delete.setEnabled(False)
+        self.btn_flag_delete.setStyleSheet(self._warn_toolbar_btn_style())
+        tb.addWidget(self.btn_flag_delete)
+
+        self.btn_auto_edit_mu = QPushButton("⚙ Auto-Edit MU")
+        self.btn_auto_edit_mu.setShortcut(QKeySequence("E"))
+        self.btn_auto_edit_mu.setToolTip(
+            "Apply rule-based auto-editing to the current MU [E]\n"
+            "Removes low/high-IPT spikes; adds missed spikes by FR/IPT criteria."
+        )
+        self.btn_auto_edit_mu.clicked.connect(self._run_auto_edit_current)
+        self.btn_auto_edit_mu.setEnabled(False)
+        self.btn_auto_edit_mu.setStyleSheet(self._warn_toolbar_btn_style())
+        tb.addWidget(self.btn_auto_edit_mu)
 
         return tb
 
@@ -1547,27 +1553,6 @@ class EditionTab(QWidget):
         _border = COLORS["border"]
         _bg_hover = COLORS.get("background_hover", "#1e242b")
 
-        primary_btn_style = f"""
-            QPushButton {{
-                background-color: {COLORS['accent']};
-                color: #ffffff;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: {_fs};
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['accent_hover']};
-            }}
-            QPushButton:pressed {{
-                background-color: {COLORS.get('accent_light', COLORS['accent'])};
-            }}
-            QPushButton:disabled {{
-                background-color: {COLORS.get('background_hover', '#1e242b')};
-                color: {COLORS.get('text_dim', '#6c7086')};
-            }}"""
-
         base_btn_style = f"""
             QPushButton {{
                 background-color: {_bg};
@@ -1586,50 +1571,50 @@ class EditionTab(QWidget):
                 border-color: {_border};
             }}"""
 
-        # ── Recalculate Filter (primary action) ──────────────────────────
-        self.btn_recalc_filter = QPushButton("⟳ Recalculate Filter")
-        self.btn_recalc_filter.setStyleSheet(primary_btn_style)
-        self.btn_recalc_filter.setShortcut(QKeySequence("F"))
-        self.btn_recalc_filter.setToolTip(
-            "Replay peel-off and recompute filter + source + timestamps [F]"
+        # ── Session-level actions ────────────────────────────────────────
+        lay.addWidget(
+            QLabel("SESSION", styleSheet=get_section_header_style("warning", margin_top=0))
         )
-        self.btn_recalc_filter.clicked.connect(self._recalculate_filter)
-        self.btn_recalc_filter.setEnabled(False)
-        lay.addWidget(self.btn_recalc_filter)
 
-        # ── Per-MU actions ───────────────────────────────────────────────
-        lay.addSpacing(6)
-
-        self.btn_remove_outliers = QPushButton("⚡ Remove Outliers")
-        self.btn_remove_outliers.setStyleSheet(base_btn_style)
-        self.btn_remove_outliers.setShortcut(QKeySequence("O"))
-        self.btn_remove_outliers.setToolTip(
-            "Remove spikes causing outlier instantaneous firing rate [O]\n"
-            "Uses Tukey fence (Q75 + 1.5×IQR) on the IFR distribution.\n"
-            "For each outlier pair, the lower-amplitude spike is deleted."
+        self.btn_auto_flag = QPushButton("⚠ Auto-Flag Unreliable")
+        self.btn_auto_flag.setIcon(self._make_warning_icon())
+        self.btn_auto_flag.setStyleSheet(base_btn_style)
+        self.btn_auto_flag.setToolTip(
+            "Flag all MUs with SIL < 0.9 across all ports for deletion.\n"
+            "Units with SIL ≥ 0.9 are left for manual review."
         )
-        self.btn_remove_outliers.clicked.connect(self._remove_outliers)
-        self.btn_remove_outliers.setEnabled(False)
-        lay.addWidget(self.btn_remove_outliers)
+        self.btn_auto_flag.clicked.connect(self._auto_flag_unreliable)
+        self.btn_auto_flag.setEnabled(False)
+        lay.addWidget(self.btn_auto_flag)
 
-        self.btn_flag_delete = QPushButton("🗑 Flag to Delete")
-        self.btn_flag_delete.setStyleSheet(base_btn_style)
-        self.btn_flag_delete.setToolTip("Toggle deletion flag for the current MU [X]")
-        self.btn_flag_delete.clicked.connect(self._toggle_flag_delete)
-        self.btn_flag_delete.setEnabled(False)
-        lay.addWidget(self.btn_flag_delete)
-
-        self.btn_auto_edit_mu = QPushButton("⚙ Auto-Edit This MU")
-        self.btn_auto_edit_mu.setStyleSheet(base_btn_style)
-        self.btn_auto_edit_mu.setShortcut(QKeySequence("E"))
-        self.btn_auto_edit_mu.setToolTip(
-            "Apply rule-based auto-editing to the current MU only [E]\n"
-            "Removes low/high-IPT spikes; adds missed spikes by FR/IPT criteria.\n"
-            "Based on Wen et al. (2024). Undoable with Ctrl+Z."
+        self.btn_flag_within_dups = QPushButton("⧉ Within-Port Dups")
+        self.btn_flag_within_dups.setStyleSheet(base_btn_style)
+        self.btn_flag_within_dups.setToolTip(
+            "Flag lower-quality duplicate MUs within each grid/probe for deletion.\n"
+            "Uses rate-of-agreement (threshold 0.3) to identify duplicates."
         )
-        self.btn_auto_edit_mu.clicked.connect(self._run_auto_edit_current)
-        self.btn_auto_edit_mu.setEnabled(False)
-        lay.addWidget(self.btn_auto_edit_mu)
+        self.btn_flag_within_dups.clicked.connect(self._flag_within_duplicates)
+        self.btn_flag_within_dups.setEnabled(False)
+        lay.addWidget(self.btn_flag_within_dups)
+
+        self.btn_flag_cross_dups = QPushButton("⧉ Cross-Port Dups")
+        self.btn_flag_cross_dups.setStyleSheet(base_btn_style)
+        self.btn_flag_cross_dups.setToolTip(
+            "Flag lower-quality duplicate MUs across different grids/probes for deletion.\n"
+            "Uses rate-of-agreement (threshold 0.3) to identify duplicates."
+        )
+        self.btn_flag_cross_dups.clicked.connect(self._flag_cross_duplicates)
+        self.btn_flag_cross_dups.setEnabled(False)
+        lay.addWidget(self.btn_flag_cross_dups)
+
+        self.btn_delete_flagged = QPushButton("🗑 Delete All Flagged MUs")
+        self.btn_delete_flagged.setStyleSheet(base_btn_style)
+        self.btn_delete_flagged.setToolTip(
+            "Permanently remove all MUs flagged for deletion from the current session"
+        )
+        self.btn_delete_flagged.clicked.connect(self._delete_all_flagged)
+        self.btn_delete_flagged.setEnabled(False)
+        lay.addWidget(self.btn_delete_flagged)
 
         self.muap_widget = pg.GraphicsLayoutWidget()
         self.muap_widget.setBackground(COLORS["background"])
@@ -2138,6 +2123,12 @@ class EditionTab(QWidget):
                     mu.props = p
 
             self._ports[port_name] = motor_units
+
+            # Restore flagged state persisted from a previous save
+            for idx in decomp_data.get("flagged_mus", {}).get(port_name, []):
+                if 0 <= idx < len(motor_units):
+                    motor_units[idx].flagged_duplicate = True
+
             self._grid_info[port_name] = grid_cfg
             if emg_port is not None:
                 self._emg_data[port_name] = emg_port
@@ -2169,6 +2160,7 @@ class EditionTab(QWidget):
         for btn in (
             self.btn_remove_outliers,
             self.btn_flag_delete,
+            self.btn_delete_flagged,
             self.btn_auto_edit_mu,
             self.btn_sel_add,
             self.btn_sel_delete,
@@ -2273,36 +2265,34 @@ class EditionTab(QWidget):
 
         ports = list(self._ports.keys())
         discharge_times, pulse_trains, mu_filters, mu_properties = [], [], [], []
-        kept_indices_per_port = {}
+        flagged_mus_per_port = {}
 
         for port_name in ports:
             mus = self._ports[port_name]
-            kept_local = [
-                (i, mu) for i, mu in enumerate(mus) if not mu.flagged_duplicate
+            flagged_mus_per_port[port_name] = [
+                i for i, mu in enumerate(mus) if mu.flagged_duplicate
             ]
-            kept_indices_per_port[port_name] = [i for i, _ in kept_local]
-            kept = [mu for _, mu in kept_local]
 
             if self._full_source_mode:
-                save_ts = [self._ts_to_plateau_local(mu.timestamps) for mu in kept]
+                save_ts = [self._ts_to_plateau_local(mu.timestamps) for mu in mus]
                 save_src = [
                     (
                         mu.source[self._start_sample : self._end_sample]
                         if len(mu.source) > (self._end_sample - self._start_sample)
                         else mu.source
                     )
-                    for mu in kept
+                    for mu in mus
                 ]
             else:
-                save_ts = [mu.timestamps for mu in kept]
-                save_src = [mu.source for mu in kept]
+                save_ts = [mu.timestamps for mu in mus]
+                save_src = [mu.source for mu in mus]
 
             discharge_times.append(save_ts)
             pulse_trains.append(save_src)
-            mu_filters.append([mu.mu_filter for mu in kept] or None)
+            mu_filters.append([mu.mu_filter for mu in mus] or None)
 
             port_props = []
-            for mu in kept:
+            for mu in mus:
                 if mu.props is not None:
                     d = dataclasses.asdict(mu.props)
                     d.pop("muap_grid", None)
@@ -2320,6 +2310,7 @@ class EditionTab(QWidget):
             "mu_filters": mu_filters,
             "skip_filter_recalc": True,
             "mu_properties": mu_properties,
+            "flagged_mus": flagged_mus_per_port,
         }
 
         if self._original_decomp_data is not None:
@@ -2341,46 +2332,12 @@ class EditionTab(QWidget):
                 if val is not None and key not in save_data:
                     save_data[key] = val
 
-            # Remap peel_off_sequence to match kept MUs only
+            # Pass peel_off_sequence through unchanged — all MUs are saved,
+            # so no index remapping is needed. Remapping only happens when
+            # units are physically deleted via "Delete All Flagged MUs".
             orig_peel = self._original_decomp_data.get("peel_off_sequence")
             if orig_peel is not None:
-                # Build a per-port mapping: old local index -> new local index
-                # (or None if that MU was flagged/deleted)
-                port_index_maps = {}
-                for port_name in ports:
-                    all_mus = self._ports[port_name]
-                    kept_set = set(kept_indices_per_port[port_name])
-                    old_to_new = {}
-                    new_idx = 0
-                    for old_idx in range(len(all_mus)):
-                        if old_idx in kept_set:
-                            old_to_new[old_idx] = new_idx
-                            new_idx += 1
-                        # else: deleted — not added to map
-                    port_index_maps[port_name] = old_to_new
-
-                def remap_port_peel_seq(port_seq, old_to_new):
-                    remapped = []
-                    for entry in port_seq:
-                        uid = entry.get("accepted_unit_idx")
-                        if uid is None:
-                            # Rejected repeat — keep as-is, no index to remap
-                            remapped.append(entry)
-                        elif uid in old_to_new:
-                            # Kept MU — update its index
-                            remapped.append(
-                                {**entry, "accepted_unit_idx": old_to_new[uid]}
-                            )
-                        # else: flagged MU — drop this entry entirely
-                    return remapped
-
-                # peel_off_sequence is list[list], one per port
-                new_peel = []
-                for port_idx, port_name in enumerate(ports):
-                    port_seq = orig_peel[port_idx] if port_idx < len(orig_peel) else []
-                    old_to_new = port_index_maps[port_name]
-                    new_peel.append(remap_port_peel_seq(port_seq, old_to_new))
-                save_data["peel_off_sequence"] = new_peel
+                save_data["peel_off_sequence"] = orig_peel
 
             orig_filters = self._original_decomp_data.get("mu_filters")
             if orig_filters is not None:
@@ -2721,6 +2678,66 @@ class EditionTab(QWidget):
         self._update_status(
             f"MU {mu.id} {'flagged' if mu.flagged_duplicate else 'unflagged'}"
         )
+
+    def _delete_all_flagged(self):
+        ports = list(self._ports.keys())
+        total = sum(
+            1 for p in ports for mu in self._ports[p] if mu.flagged_duplicate
+        )
+        if total == 0:
+            self._update_status("No MUs are flagged for deletion")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete Flagged MUs",
+            f"Permanently delete {total} flagged MU(s) from the current session?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Remap peel_off_sequence before deletion so filter recalculation
+        # continues to work correctly on the remaining units.
+        if self._original_decomp_data is not None:
+            orig_peel = self._original_decomp_data.get("peel_off_sequence")
+            if orig_peel is not None:
+                port_index_maps = {}
+                for port_name in ports:
+                    old_to_new = {}
+                    new_idx = 0
+                    for old_idx, mu in enumerate(self._ports[port_name]):
+                        if not mu.flagged_duplicate:
+                            old_to_new[old_idx] = new_idx
+                            new_idx += 1
+                    port_index_maps[port_name] = old_to_new
+
+                new_peel = []
+                for port_idx, port_name in enumerate(ports):
+                    port_seq = orig_peel[port_idx] if port_idx < len(orig_peel) else []
+                    old_to_new = port_index_maps[port_name]
+                    remapped = []
+                    for entry in port_seq:
+                        uid = entry.get("accepted_unit_idx")
+                        if uid is None:
+                            remapped.append(entry)
+                        elif uid in old_to_new:
+                            remapped.append({**entry, "accepted_unit_idx": old_to_new[uid]})
+                    new_peel.append(remapped)
+                self._original_decomp_data["peel_off_sequence"] = new_peel
+
+        for port_name in ports:
+            kept = [mu for mu in self._ports[port_name] if not mu.flagged_duplicate]
+            for i, mu in enumerate(kept):
+                mu.id = i
+            self._ports[port_name] = kept
+
+        self._current_mu_idx = 0
+        self._refresh_mu_combo()
+        if self.mu_combo.count() > 0:
+            self.mu_combo.setCurrentIndex(0)
+        self._update_status(f"Deleted {total} flagged MU(s)")
 
     def _remove_outliers(self):
         """Remove spikes causing outlier IFR in the current MU.

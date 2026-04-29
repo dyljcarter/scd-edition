@@ -476,37 +476,59 @@ class VisualisationTab(QWidget):
         key_fn = _SORT_FNS.get(sort_name, _sort_key_recruit)
         return sorted(active, key=lambda pair: key_fn(pair[1], self._fsamp))
 
+    # Maximum number of points sent to pyqtgraph per trace.
+    _MAX_DISPLAY_PTS = 4000
+
     def _render(self):
         active = self._get_active_mus()
         sorted_active = self._sorted_mus(active)
         self._render_raster(sorted_active)
-        spike_matrix, t_axis = self._build_idr_matrix(sorted_active)
-        self._render_idr(sorted_active, spike_matrix, t_axis)
-        self._render_cst(spike_matrix, t_axis)
+        spike_matrix, t_axis, display_fs = self._build_idr_matrix(sorted_active)
+        # Compute IDR once and share between the two sub-renderers.
+        idr = None
+        if spike_matrix is not None:
+            idr = get_inst_discharge_rate(spike_matrix, int(display_fs))
+        self._render_idr(sorted_active, idr, t_axis)
+        self._render_cst(idr, t_axis)
         self._update_sidebar_colours(sorted_active)
+
+    # Maximum sampling rate used internally for IDR/CST computation.
+    # A 1-second Hanning window captures all meaningful firing-rate variation
+    # well below 500 Hz, so there is no benefit computing at the raw rate.
+    _IDR_MAX_FS = 1000  # Hz
 
     def _build_idr_matrix(self, sorted_mus: List[tuple]):
         if not sorted_mus:
-            return None, None
+            return None, None, self._IDR_MAX_FS
 
         all_ts = [mu.timestamps for _, mu in sorted_mus if len(mu.timestamps) > 0]
         if not all_ts:
-            return None, None
+            return None, None, self._IDR_MAX_FS
+
+        # Downsample timestamps to a capped display rate so the spike matrix
+        # stays tractable regardless of the acquisition rate.
+        display_fs = min(float(self._fsamp), float(self._IDR_MAX_FS))
+        ratio = self._fsamp / display_fs  # e.g. 10 for 10 kHz → 1 kHz
 
         ts_global_min = int(min(ts.min() for ts in all_ts))
         ts_global_max = int(max(ts.max() for ts in all_ts))
-        n_samples = ts_global_max - ts_global_min + 1
+
+        min_disp = int(np.floor(ts_global_min / ratio))
+        max_disp = int(np.ceil(ts_global_max / ratio))
+        n_samples = max_disp - min_disp + 1
 
         spike_matrix = np.zeros((n_samples, len(sorted_mus)), dtype=bool)
         for col, (_, mu) in enumerate(sorted_mus):
             if len(mu.timestamps) == 0:
                 continue
-            ts_rel = mu.timestamps.astype(np.int64) - ts_global_min
-            valid = ts_rel[(ts_rel >= 0) & (ts_rel < n_samples)]
+            ts_disp = np.round(mu.timestamps / ratio).astype(np.int64) - min_disp
+            valid = ts_disp[(ts_disp >= 0) & (ts_disp < n_samples)]
             spike_matrix[valid, col] = True
 
-        t_axis = np.arange(n_samples) / self._fsamp + ts_global_min / self._fsamp
-        return spike_matrix, t_axis
+        t_axis = (
+            np.arange(n_samples) / display_fs + ts_global_min / self._fsamp
+        )
+        return spike_matrix, t_axis, display_fs
 
     def _render_raster(self, sorted_mus: List[tuple]):
         pw = self._raster_plot
@@ -543,21 +565,31 @@ class VisualisationTab(QWidget):
 
         self._draw_aux_overlay(pw, y_min=-0.5, y_max=len(sorted_mus) - 0.5)
 
+    @staticmethod
+    def _decimate_for_display(
+        t: np.ndarray, y: np.ndarray, max_pts: int
+    ):
+        """Return (t, y) downsampled to at most *max_pts* by peak-preserving
+        block decimation.  Falls through unchanged when already small enough."""
+        n = len(t)
+        if n <= max_pts:
+            return t, y
+        step = max(1, n // max_pts)
+        return t[::step], y[::step]
+
     def _render_idr(
         self,
         sorted_mus: List[tuple],
-        spike_matrix: Optional[np.ndarray],
+        idr: Optional[np.ndarray],
         t_axis: Optional[np.ndarray],
     ):
         pw = self._idr_plot
         pw.clear()
 
-        if spike_matrix is None or t_axis is None or not sorted_mus:
+        if idr is None or t_axis is None or not sorted_mus:
             return
 
         palette = _blue_palette(len(sorted_mus))
-        idr = get_inst_discharge_rate(spike_matrix, int(self._fsamp))
-
         y_max = 0.0
         for rank, (port_name, mu) in enumerate(sorted_mus):
             dr_trace = idr[:, rank]
@@ -565,9 +597,10 @@ class VisualisationTab(QWidget):
             if peak > y_max:
                 y_max = peak
             r, g, b = palette[rank]
+            t_d, y_d = self._decimate_for_display(t_axis, dr_trace, self._MAX_DISPLAY_PTS)
             pw.plot(
-                t_axis,
-                dr_trace,
+                t_d,
+                y_d,
                 pen=pg.mkPen(color=(r, g, b, 220), width=1.5),
                 name=f"MU {mu.id} ({port_name})",
             )
@@ -576,16 +609,15 @@ class VisualisationTab(QWidget):
 
     def _render_cst(
         self,
-        spike_matrix: Optional[np.ndarray],
+        idr: Optional[np.ndarray],
         t_axis: Optional[np.ndarray],
     ):
         pw = self._cst_plot
         pw.clear()
 
-        if spike_matrix is None or t_axis is None:
+        if idr is None or t_axis is None:
             return
 
-        idr = get_inst_discharge_rate(spike_matrix, int(self._fsamp))
         cst = idr.sum(axis=1)
         y_max = float(cst.max())
 
@@ -594,9 +626,10 @@ class VisualisationTab(QWidget):
             int(COLORS["info"][3:5], 16),
             int(COLORS["info"][5:7], 16),
         )
+        t_d, y_d = self._decimate_for_display(t_axis, cst, self._MAX_DISPLAY_PTS)
         pw.plot(
-            t_axis,
-            cst,
+            t_d,
+            y_d,
             pen=pg.mkPen(color=(r_info, g_info, b_info), width=2),
         )
 
