@@ -36,22 +36,6 @@ _AUX_COLORS_HEX = ["#FFD700", "#C0EFFF", "#FFB347"]
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 
 
-from typing import List
-import numpy as np
-
-
-from typing import List
-import numpy as np
-
-
-from typing import List
-import numpy as np
-
-
-from typing import List
-import numpy as np
-
-
 def _lipari_palette(n: int) -> List[Tuple[int, int, int]]:
     """
     Sample n colours from the Lipari perceptual colormap.
@@ -605,8 +589,6 @@ class VisualisationTab(QWidget):
             return
 
         palette = _lipari_palette(len(sorted_mus))
-        idr = get_inst_discharge_rate(spike_matrix, int(self._fsamp))
-
         y_max = 0.0
         for rank, (port_name, mu) in enumerate(sorted_mus):
             dr_trace = idr[:, rank]
