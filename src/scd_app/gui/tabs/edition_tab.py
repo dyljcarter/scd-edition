@@ -65,6 +65,7 @@ from scd_app.core.auto_editor import auto_edit, AutoEditResult, MIN_SPIKES
 
 try:
     from motor_unit_toolbox import spike_comp as _tb_spike_comp
+
     _SPIKE_COMP_AVAILABLE = True
 except ImportError:
     _SPIKE_COMP_AVAILABLE = False
@@ -75,6 +76,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 GRID_POSITIONS_13x5 = {
+    0: (0, 0),  # NaN
     1: (1, 0),
     2: (2, 0),
     3: (3, 0),
@@ -318,71 +320,71 @@ GRID_POSITIONS_HD02MM0808 = {
 }
 
 GRID_POSITIONS_HD04MM1305 = {
-    # Col 0
     52: (0, 0),
-    53: (0, 1),
-    54: (0, 2),
-    55: (0, 3),
-    56: (0, 4),
-    57: (0, 5),
-    58: (0, 6),
-    59: (0, 7),
-    60: (0, 8),
-    61: (0, 9),
-    62: (0, 10),
-    63: (0, 11),
-    64: (0, 12),
-    39: (1, 0),
+    53: (1, 0),
+    54: (2, 0),
+    55: (3, 0),
+    56: (4, 0),
+    57: (5, 0),
+    58: (6, 0),
+    59: (7, 0),
+    60: (8, 0),
+    61: (9, 0),
+    62: (10, 0),
+    63: (11, 0),
+    64: (12, 0),
+    39: (0, 1),
     40: (1, 1),
-    41: (1, 2),
-    42: (1, 3),
-    43: (1, 4),
-    44: (1, 5),
-    45: (1, 6),
-    46: (1, 7),
-    47: (1, 8),
-    48: (1, 9),
-    49: (1, 10),
-    50: (1, 11),
-    51: (1, 12),
-    26: (2, 0),
-    27: (2, 1),
+    41: (2, 1),
+    42: (3, 1),
+    43: (4, 1),
+    44: (5, 1),
+    45: (6, 1),
+    46: (7, 1),
+    47: (8, 1),
+    48: (9, 1),
+    49: (10, 1),
+    50: (11, 1),
+    51: (12, 1),
+    26: (0, 2),
+    27: (1, 2),
     28: (2, 2),
-    29: (2, 3),
-    30: (2, 4),
-    31: (2, 5),
-    32: (2, 6),
-    33: (2, 7),
-    34: (2, 8),
-    35: (2, 9),
-    36: (2, 10),
-    37: (2, 11),
-    38: (2, 12),
-    13: (3, 0),
-    14: (3, 1),
-    15: (3, 2),
+    29: (3, 2),
+    30: (4, 2),
+    31: (5, 2),
+    32: (6, 2),
+    33: (7, 2),
+    34: (8, 2),
+    35: (9, 2),
+    36: (10, 2),
+    37: (11, 2),
+    38: (12, 2),
+    13: (0, 3),
+    14: (1, 3),
+    15: (2, 3),
     16: (3, 3),
-    17: (3, 4),
-    18: (3, 5),
-    19: (3, 6),
-    20: (3, 7),
-    21: (3, 8),
-    22: (3, 9),
-    23: (3, 10),
-    24: (3, 11),
-    25: (3, 12),
-    1: (4, 1),
-    2: (4, 2),
-    3: (4, 3),
+    17: (4, 3),
+    18: (5, 3),
+    19: (6, 3),
+    20: (7, 3),
+    21: (8, 3),
+    22: (9, 3),
+    23: (10, 3),
+    24: (11, 3),
+    25: (12, 3),
+    0: (0, 4),  # NaN
+    1: (1, 4),
+    2: (2, 4),
+    3: (3, 4),
     4: (4, 4),
-    5: (4, 5),
-    6: (4, 6),
-    7: (4, 7),
-    8: (4, 8),
-    9: (4, 9),
-    10: (4, 10),
-    11: (4, 11),
-    12: (4, 12),
+    5: (5, 4),
+    6: (6, 4),
+    7: (7, 4),
+    8: (8, 4),
+    9: (9, 4),
+    10: (10, 4),
+    11: (11, 4),
+    12: (12, 4),
 }
 
 GRID_POSITIONS_HD04MM1606 = {
@@ -1098,11 +1100,29 @@ class MuapPopoutDialog(QDialog):
             lbl.setMinimumHeight(0)
             return lbl
 
-        _add_lbl(self._plot, f"<span style='{lbl_style}'><b>Ch</b></span>", 1, 0, justify="center")
+        _add_lbl(
+            self._plot,
+            f"<span style='{lbl_style}'><b>Ch</b></span>",
+            1,
+            0,
+            justify="center",
+        )
         for r in range(rows):
-            _add_lbl(self._plot, f"<span style='{lbl_style}'><b>{r + 1}</b></span>", 1, r + 1, justify="center")
+            _add_lbl(
+                self._plot,
+                f"<span style='{lbl_style}'><b>{r + 1}</b></span>",
+                1,
+                r + 1,
+                justify="center",
+            )
         for c in range(cols):
-            _add_lbl(self._plot, f"<span style='{lbl_style}'><b>{c + 1}</b></span>", c + 2, 0, justify="center")
+            _add_lbl(
+                self._plot,
+                f"<span style='{lbl_style}'><b>{c + 1}</b></span>",
+                c + 2,
+                0,
+                justify="center",
+            )
 
         gl = self._plot.ci.layout
         for c in range(cols):
@@ -1344,8 +1364,7 @@ class EditionTab(QWidget):
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar()
         tb.setMovable(False)
-        tb.setStyleSheet(
-            f"""
+        tb.setStyleSheet(f"""
             QToolBar {{
                 background-color: {COLORS.get('background_light','#2a2a3c')};
                 border-bottom: 1px solid {COLORS['border']};
@@ -1372,8 +1391,7 @@ class EditionTab(QWidget):
                 background-color: {COLORS.get('info','#89b4fa')}30;
                 border-color: {COLORS.get('info','#89b4fa')};
             }}
-        """
-        )
+        """)
 
         # ── File ──────────────────────────────────────────────────────
         self.action_load = QAction("📂 Load", self)
@@ -1848,7 +1866,8 @@ class EditionTab(QWidget):
         """Return a snapshot of all data needed by the Visualisation tab."""
         return {
             "ports": self._ports,
-            "aux_channels": (self._original_decomp_data or {}).get("aux_channels") or [],
+            "aux_channels": (self._original_decomp_data or {}).get("aux_channels")
+            or [],
             "fsamp": self._fsamp,
             "start_sample": self._start_sample,
             "end_sample": self._end_sample,
@@ -1956,8 +1975,9 @@ class EditionTab(QWidget):
             try:
                 self._update_status("Computing full-length sources (peel-off replay)…")
                 full_port_results, start_sample, end_sample, err = (
-                    compute_all_full_sources(decomp_data,
-                                            redetect_timestamps=self._redetect_timestamps)
+                    compute_all_full_sources(
+                        decomp_data, redetect_timestamps=self._redetect_timestamps
+                    )
                 )
                 if err:
                     print(f"  [edition] Full source warning: {err}")
@@ -2171,9 +2191,7 @@ class EditionTab(QWidget):
             btn.setEnabled(True)
 
         all_mus_have_props = all(
-            mu.props is not None
-            for mus in self._ports.values()
-            for mu in mus
+            mu.props is not None for mus in self._ports.values() for mu in mus
         )
         if not all_mus_have_props:
             _no_props_tip = "Compute MU properties first"
@@ -2907,7 +2925,9 @@ class EditionTab(QWidget):
     def _flag_within_duplicates(self):
         """Detect and flag lower-quality within-port duplicate MUs for deletion."""
         if not _SPIKE_COMP_AVAILABLE:
-            self._update_status("motor_unit_toolbox not available — cannot detect duplicates")
+            self._update_status(
+                "motor_unit_toolbox not available — cannot detect duplicates"
+            )
             return
 
         ROA_THRESHOLD = 0.3
@@ -2967,8 +2987,10 @@ class EditionTab(QWidget):
                     mu.flagged_duplicate = True
 
         n_flagged = sum(
-            1 for mus in self._ports.values()
-            for mu in mus if mu.within_duplicate_role == "delete"
+            1
+            for mus in self._ports.values()
+            for mu in mus
+            if mu.within_duplicate_role == "delete"
         )
         self._refresh_mu_combo()
         self.mu_combo.setCurrentIndex(self._current_mu_idx)
@@ -2980,7 +3002,9 @@ class EditionTab(QWidget):
     def _flag_cross_duplicates(self):
         """Detect and flag lower-quality cross-port duplicate MUs for deletion."""
         if not _SPIKE_COMP_AVAILABLE:
-            self._update_status("motor_unit_toolbox not available — cannot detect duplicates")
+            self._update_status(
+                "motor_unit_toolbox not available — cannot detect duplicates"
+            )
             return
 
         port_names = list(self._ports.keys())
@@ -3048,7 +3072,7 @@ class EditionTab(QWidget):
                 if not mu.cross_duplicate_partners:
                     continue
                 partner_mus = []
-                for (pname, mid, _score) in mu.cross_duplicate_partners:
+                for pname, mid, _score in mu.cross_duplicate_partners:
                     for pm in self._ports.get(pname, []):
                         if pm.id == mid:
                             partner_mus.append(pm)
@@ -3064,8 +3088,10 @@ class EditionTab(QWidget):
                     mu.flagged_duplicate = True
 
         n_flagged = sum(
-            1 for mus in self._ports.values()
-            for mu in mus if mu.cross_duplicate_role == "delete"
+            1
+            for mus in self._ports.values()
+            for mu in mus
+            if mu.cross_duplicate_role == "delete"
         )
         self._refresh_mu_combo()
         self.mu_combo.setCurrentIndex(self._current_mu_idx)
@@ -3309,7 +3335,9 @@ class EditionTab(QWidget):
             f"<span style='color:{COLORS['foreground']};font-size:10pt;'>"
             f"MU {self._current_mu_idx}</span>"
         )
-        self.muap_widget.addLabel(label, row=0, col=0, colspan=rows + 1, justify="center")
+        self.muap_widget.addLabel(
+            label, row=0, col=0, colspan=rows + 1, justify="center"
+        )
 
         lbl_style = f"color:{COLORS.get('text_dim','#6c7086')}; font-size:7pt;"
 
@@ -3319,11 +3347,29 @@ class EditionTab(QWidget):
             lbl.setMinimumHeight(0)
             return lbl
 
-        _add_lbl(self.muap_widget, f"<span style='{lbl_style}'><b>Ch</b></span>", 1, 0, justify="center")
+        _add_lbl(
+            self.muap_widget,
+            f"<span style='{lbl_style}'><b>Ch</b></span>",
+            1,
+            0,
+            justify="center",
+        )
         for r in range(rows):
-            _add_lbl(self.muap_widget, f"<span style='{lbl_style}'>{r + 1}</span>", 1, r + 1, justify="center")
+            _add_lbl(
+                self.muap_widget,
+                f"<span style='{lbl_style}'>{r + 1}</span>",
+                1,
+                r + 1,
+                justify="center",
+            )
         for c in range(cols):
-            _add_lbl(self.muap_widget, f"<span style='{lbl_style}'>{c + 1}</span>", c + 2, 0, justify="center")
+            _add_lbl(
+                self.muap_widget,
+                f"<span style='{lbl_style}'>{c + 1}</span>",
+                c + 2,
+                0,
+                justify="center",
+            )
 
         gl = self.muap_widget.ci.layout
         for c in range(cols):

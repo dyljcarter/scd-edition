@@ -6,8 +6,8 @@ X-axes are linked across all three inner tabs.
 AUX force channels can be overlaid on any plot and toggled via floating legend (top-right).
 """
 
-from typing import Dict, List, Optional, Set
-
+from typing import Dict, List, Optional, Set, Tuple
+from scd_app.gui.style.lipari import lipari_map
 import numpy as np
 from PyQt5.QtCore import Qt, pyqtSlot
 from PyQt5.QtWidgets import (
@@ -36,18 +36,37 @@ _AUX_COLORS_HEX = ["#FFD700", "#C0EFFF", "#FFB347"]
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 
 
-def _blue_palette(n: int) -> List[tuple]:
-    """Generate n colours linearly interpolated from #63B3ED to #003E74."""
-    if n == 0:
+from typing import List
+import numpy as np
+
+
+from typing import List
+import numpy as np
+
+
+from typing import List
+import numpy as np
+
+
+from typing import List
+import numpy as np
+
+
+def _lipari_palette(n: int) -> List[Tuple[int, int, int]]:
+    """
+    Sample n colours from the Lipari perceptual colormap.
+    (Crameri, F. (2018). Scientific colour maps. Zenodo. https://doi.org/10.5281/zenodo.1243862).
+    """
+    if n <= 0:
         return []
     if n == 1:
-        return [(0x63, 0xB3, 0xED)]
-    light = np.array([0x63, 0xB3, 0xED], dtype=float)
-    dark = np.array([0x00, 0x3E, 0x74], dtype=float)
-    return [
-        tuple(int(v) for v in light * (1 - i / (n - 1)) + dark * (i / (n - 1)))
-        for i in range(n)
-    ]
+        c = lipari_map(0.0)[:3]
+        return [tuple((np.array(c) * 255).astype(int))]
+
+    xs = np.linspace(0.4, 1.0, n)
+    cols = lipari_map(xs)[:, :3]  # drop alpha
+
+    return [tuple((c * 255).astype(int)) for c in cols]
 
 
 # ── Sort helpers ──────────────────────────────────────────────────────────────
@@ -415,7 +434,7 @@ class VisualisationTab(QWidget):
                 insert_pos += 1
 
     def _update_sidebar_colours(self, sorted_active: List[tuple]):
-        palette = _blue_palette(len(sorted_active))
+        palette = _lipari_palette(len(sorted_active))
         color_map: Dict[tuple, tuple] = {}
         for rank, (port_name, mu) in enumerate(sorted_active):
             color_map[(port_name, mu.id)] = palette[rank]
@@ -525,9 +544,7 @@ class VisualisationTab(QWidget):
             valid = ts_disp[(ts_disp >= 0) & (ts_disp < n_samples)]
             spike_matrix[valid, col] = True
 
-        t_axis = (
-            np.arange(n_samples) / display_fs + ts_global_min / self._fsamp
-        )
+        t_axis = np.arange(n_samples) / display_fs + ts_global_min / self._fsamp
         return spike_matrix, t_axis, display_fs
 
     def _render_raster(self, sorted_mus: List[tuple]):
@@ -538,7 +555,7 @@ class VisualisationTab(QWidget):
         if not sorted_mus:
             return
 
-        palette = _blue_palette(len(sorted_mus))
+        palette = _lipari_palette(len(sorted_mus))
         fsamp = self._fsamp
         ticks = []
         for rank, (port_name, mu) in enumerate(sorted_mus):
@@ -566,9 +583,7 @@ class VisualisationTab(QWidget):
         self._draw_aux_overlay(pw, y_min=-0.5, y_max=len(sorted_mus) - 0.5)
 
     @staticmethod
-    def _decimate_for_display(
-        t: np.ndarray, y: np.ndarray, max_pts: int
-    ):
+    def _decimate_for_display(t: np.ndarray, y: np.ndarray, max_pts: int):
         """Return (t, y) downsampled to at most *max_pts* by peak-preserving
         block decimation.  Falls through unchanged when already small enough."""
         n = len(t)
@@ -589,7 +604,9 @@ class VisualisationTab(QWidget):
         if idr is None or t_axis is None or not sorted_mus:
             return
 
-        palette = _blue_palette(len(sorted_mus))
+        palette = _lipari_palette(len(sorted_mus))
+        idr = get_inst_discharge_rate(spike_matrix, int(self._fsamp))
+
         y_max = 0.0
         for rank, (port_name, mu) in enumerate(sorted_mus):
             dr_trace = idr[:, rank]
@@ -597,7 +614,9 @@ class VisualisationTab(QWidget):
             if peak > y_max:
                 y_max = peak
             r, g, b = palette[rank]
-            t_d, y_d = self._decimate_for_display(t_axis, dr_trace, self._MAX_DISPLAY_PTS)
+            t_d, y_d = self._decimate_for_display(
+                t_axis, dr_trace, self._MAX_DISPLAY_PTS
+            )
             pw.plot(
                 t_d,
                 y_d,
